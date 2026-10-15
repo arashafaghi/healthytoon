@@ -16,12 +16,14 @@ import pytest
 
 from healthytoon.core.types import (
     Category,
+    CheckOutcome,
     Finding,
     Location,
     Remediation,
     Report,
     Score,
     Severity,
+    Status,
     Summary,
     TargetInfo,
     ToolInfo,
@@ -41,7 +43,11 @@ def sarif_schema() -> Any:
     return _load_schema()
 
 
-def _report(findings: tuple[Finding, ...] = ()) -> Report:
+def _report(
+    findings: tuple[Finding, ...] = (),
+    *,
+    outcomes: tuple[CheckOutcome, ...] = (),
+) -> Report:
     return Report(
         tool=ToolInfo(name="healthytoon", version="0.1.0"),
         target=TargetInfo(path=".", files_scanned=3),
@@ -50,6 +56,7 @@ def _report(findings: tuple[Finding, ...] = ()) -> Report:
             score=Score(overall=80.0, grade="B"),
         ),
         findings=findings,
+        outcomes=outcomes,
     )
 
 
@@ -59,9 +66,10 @@ def _finding(
     severity: Severity,
     file: str | None = "pkg/mod.py",
     line: int | None = 12,
+    end_line: int | None = None,
     remediation: Remediation | None = None,
 ) -> Finding:
-    location = Location(file=file, line=line) if file is not None else None
+    location = Location(file=file, line=line, end_line=end_line) if file is not None else None
     return Finding(
         rule_id=rule_id,
         check="schema.check",
@@ -108,4 +116,26 @@ def test_report_with_located_findings_validates(sarif_schema: Any) -> None:
 
 def test_report_without_findings_validates(sarif_schema: Any) -> None:
     errors = _validate(SarifReporter().render(_report()), sarif_schema)
+    assert errors == []
+
+
+def test_report_with_error_and_skip_outcomes_validates(sarif_schema: Any) -> None:
+    findings = (
+        _finding(
+            "HT-001",
+            severity=Severity.HIGH,
+            line=10,
+            end_line=14,
+            remediation=Remediation(summary="fix it", url="https://example.com/fix"),
+        ),
+        _finding("HT-002", severity=Severity.LOW, file="other.py", line=None),
+    )
+    outcomes = (
+        CheckOutcome(check="HT-001", status=Status.ERROR, message="check crashed"),
+        CheckOutcome(check="HT-002", status=Status.SKIP),
+        CheckOutcome(check="HT-003", status=Status.PASS),
+    )
+
+    errors = _validate(SarifReporter().render(_report(findings, outcomes=outcomes)), sarif_schema)
+
     assert errors == []

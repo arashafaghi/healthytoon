@@ -8,8 +8,9 @@ Healthytoon is a pre-1.0 foundation (version 0.1.0). Implemented so far:
 
 - **Phase 0 — Foundation:** configuration loading, CLI skeleton (`check`, `list`, `version`), exit-code contract, repository discovery.
 - **Phase 1 — Reporting spine:** check runner and registry, plus terminal, JSON, SARIF 2.1.0, and Markdown reporters.
+- **Phase 2a T2a.1a — AST structural checks:** `maintainability.function_length` (HT-MAINT-001), `maintainability.nesting_depth` (HT-MAINT-002), `maintainability.module_length` (HT-MAINT-003), `typing.annotation_coverage` (HT-TYPE-001), `documentation.docstring_coverage` (HT-DOC-001).
 
-The audit checks themselves — the maintainability engine and the CI/CD engine — are **not implemented yet**. `healthytoon check` currently runs zero checks and reports a clean result (grade A, "No findings", exit code 0). A green run does not mean the repository has been verified; it means nothing has been checked. See `ROADMAP.md` for upcoming phases.
+**Not implemented yet:** the CI/CD engine (Phase 2b), complexity analysis via optional Radon (T2a.2), dead-code detection via Vulture (T2a.3), import-cycle and duplication checks (T2a.1b), baselines and suppression, and the `init` and `explain` commands. `check` runs only the five checks above.
 
 ## Install
 
@@ -24,17 +25,25 @@ uv run healthytoon --help
 
 ```bash
 uv run healthytoon version    # tool + interpreter version
-uv run healthytoon list       # registered checks (none yet)
+uv run healthytoon list       # the registered checks
 uv run healthytoon check .    # audit the current directory
 ```
 
-`check` today prints `healthytoon 0.1.0 — grade A (100.0/100)` and `No findings.`, exiting 0.
+`list` prints one line per registered check: id, category, default severity (for example `maintainability.function_length  maintainability  medium`).
+
+`check` prints a grade line, a findings summary, and one line per finding. A repository with issues reports findings and a grade below A, and exits 0 unless a finding is at or above the `--fail-on` threshold (default `high`); exact scores and counts depend on the repository audited.
+
+```
+healthytoon <version> — grade <A-F> (<0-100>/100)
+<N> findings: <severity counts>
+<path>:<line> <SEVERITY> <HT-RULE-ID> <message>
+```
 
 ## Commands
 
 ### `healthytoon check [PATH]`
 
-Audit a target directory (default: `.`; the first path argument is used).
+Audit a target directory (default: `.`). Exactly one target is accepted; passing additional positional arguments is a usage error (exit 2).
 
 | Option | Description |
 | --- | --- |
@@ -53,7 +62,7 @@ Audit a target directory (default: `.`; the first path argument is used).
 
 ### `healthytoon list [--category CATEGORY]`
 
-Print one line per registered check: id, category, default severity. With none registered it prints `No checks are registered yet.` and exits 0.
+Print one line per registered check (id, category, default severity). `--category` restricts output to a single category.
 
 ### `healthytoon version`
 
@@ -84,34 +93,34 @@ Configuration is TOML. Sources are merged in this precedence order (lowest to hi
 
 Scalars and lists replace lower layers per key; the `output` table and each rule's `options` table are merged per key. Unknown keys are a configuration error (exit 3). Only a `pyproject.toml` carrying a `[tool.healthytoon]` table is considered.
 
-Example `pyproject.toml` — the same keys go at the top level of a standalone `healthytoon.toml` (no `[tool.healthytoon]` table):
+Example `pyproject.toml` (the same keys go at the top level of a standalone `healthytoon.toml`, without the `[tool.healthytoon]` table):
 
 ```toml
 [tool.healthytoon]
 include = ["src/**"]
-exclude = ["tests/**", "build/**"]
+exclude = ["tests/**"]
 fail_on = "high"
-baseline = "healthytoon-baseline.json"  # reserved; not applied yet
-jobs = 4
 
 [tool.healthytoon.output]
 format = "terminal"
 color = "auto"
 output = "-"
 
-[tool.healthytoon.rules."<rule-id>"]
-enabled = false
-severity = "low"
-options = { threshold = 10 }
+[tool.healthytoon.rules."maintainability.function_length"]
+enabled = true
+severity = "medium"
+options = { max_length = 50 }
 ```
 
 - `include` — path globs to scan (default: `["**"]`, i.e. the whole repository).
-- `respect_gitignore` — honor `.gitignore` during discovery (default: `true`).
 - `exclude` — path globs to skip. Defaults exclude VCS, virtualenv, build, and cache directories (`.git`, `.hg`, `.svn`, `.venv`, `venv`, `.tox`, `.nox`, `.eggs`, `__pycache__`, `build`, `dist`, `site-packages`, `*.egg-info`, `node_modules`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `htmlcov`). CLI `--exclude` values are added to these.
-- `fail_on` — default gate severity (default: `high`); `baseline` — reserved for future baseline support: accepted and stored, not applied yet.
+- `respect_gitignore` — honor `.gitignore` during discovery (default: `true`).
+- `fail_on` — default gate severity (default: `high`). `baseline` — reserved, accepted and stored but not applied yet.
 - `jobs` — maximum parallel workers; currently accepted but checks run sequentially.
 - `output` — table with `format` (`terminal` | `json` | `sarif` | `markdown`), `color` (`auto` | `always` | `never`), and `output` (`-` or a file path).
-- `rules."<id>"` — per-rule settings: `enabled` (bool), `severity`, and `options` (table).
+- `rules."<check-id>"` — per-check settings keyed by the **check id** (for example `maintainability.function_length`), **not** by the `HT-*` rule id. An `HT-*` key is accepted but is a silent no-op: it neither selects nor configures a check. Each entry supports `enabled` (bool), `severity` (overrides the check's default severity), and `options` (table).
+
+Per-check `options` (defaults in parentheses): `maintainability.function_length` `max_length` (50); `maintainability.nesting_depth` `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false); `maintainability.module_length` `max_lines` (1000); `typing.annotation_coverage` `min_ratio` (0.8); `documentation.docstring_coverage` `min_ratio` (0.8).
 
 ## Severity and scoring
 
@@ -119,4 +128,4 @@ Five severities, ordered from least to most severe: `info`, `low`, `medium`, `hi
 
 ## Documentation
 
-This README is the user-facing documentation, limited to implemented functionality per the roadmap's completion criteria. Planned work (maintainability and CI/CD engines, baselines, `init` and `explain` commands) is listed in `ROADMAP.md`.
+This README documents implemented functionality only. Planned work (the CI/CD engine, Radon complexity analysis, Vulture dead-code detection, import-cycle and duplication checks, baselines and suppression, and `init`/`explain`) is listed in `ROADMAP.md`.

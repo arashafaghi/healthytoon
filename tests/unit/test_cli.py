@@ -15,6 +15,7 @@ from healthytoon.core import registry
 from healthytoon.core.context import CheckContext
 from healthytoon.core.protocols import CHECK_API_VERSION, CheckResult
 from healthytoon.core.types import Category, FileKind, Finding, Severity
+from healthytoon.errors import EXIT_USAGE
 
 
 def _make_target(root: Path) -> Path:
@@ -136,6 +137,14 @@ def test_check_bad_config(tmp_path: Path) -> None:
     bad.write_text("this is = = not valid toml\n", encoding="utf-8")
 
     assert main(["check", str(target), "--config", str(bad)]) == 3
+
+
+def test_check_multiple_targets_exits_usage(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
+    dir_a = _make_target(tmp_path / "a")
+    dir_b = _make_target(tmp_path / "b")
+
+    assert main(["check", str(dir_a), str(dir_b)]) == EXIT_USAGE
+    assert "single target directory" in capsys.readouterr().err
 
 
 def test_unknown_subcommand_exits_two() -> None:

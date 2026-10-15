@@ -10,15 +10,19 @@ from healthytoon.checks.structure import (
     FunctionLengthCheck,
     ModuleLengthCheck,
     NestingDepthCheck,
+    _source_lines,
 )
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, Severity, Status
+from healthytoon.core.runner import run_checks
+from healthytoon.core.types import Category, Severity, Status, ToolInfo
 
 _MAX_LENGTH_RULE = "maintainability.function_length"
 _MAX_DEPTH_RULE = "maintainability.nesting_depth"
 _MAX_LINES_RULE = "maintainability.module_length"
+
+_TOOL = ToolInfo(version="0.1.0")
 
 
 def _write(tmp_path: Path, name: str, text: str) -> Path:
@@ -108,6 +112,17 @@ def test_function_length_uses_dotted_qualified_names(tmp_path: Path) -> None:
     assert lines == {"Parser.parse": 2, "outer": 5, "outer.inner": 6}
 
 
+def test_function_length_duplicate_names_yield_distinct_findings(tmp_path: Path) -> None:
+    _write(tmp_path, "dupes.py", _long_function(60, "f") + _long_function(60, "f"))
+
+    report = run_checks((FunctionLengthCheck(),), _context(tmp_path), tool=_TOOL)
+
+    findings = [finding for finding in report.findings if finding.check == _MAX_LENGTH_RULE]
+    assert len(findings) == 2
+    assert {finding.symbol for finding in findings} == {"f", "f#2"}
+    assert len({finding.fingerprint for finding in findings}) == 2
+
+
 def test_unparseable_files_are_skipped(tmp_path: Path) -> None:
     _write(tmp_path, "broken.py", "def (:\n")
     _write(tmp_path, "fine.py", _long_function(10))
@@ -175,6 +190,54 @@ def test_nesting_depth_threshold_is_configurable(tmp_path: Path) -> None:
 
     assert len(result.findings) == 1
     assert dict(result.findings[0].properties) == {"depth": 2, "max": 1}
+
+
+def test_nesting_depth_elif_chain_is_a_single_level(tmp_path: Path) -> None:
+    source = (
+        "def choose(value):\n"
+        "    if value == 1:\n"
+        "        return 'one'\n"
+        "    elif value == 2:\n"
+        "        return 'two'\n"
+        "    elif value == 3:\n"
+        "        return 'three'\n"
+        "    elif value == 4:\n"
+        "        return 'four'\n"
+        "    elif value == 5:\n"
+        "        return 'five'\n"
+        "    elif value == 6:\n"
+        "        return 'six'\n"
+        "    return 'other'\n"
+    )
+    _write(tmp_path, "choose.py", source)
+    rules = {_MAX_DEPTH_RULE: RuleConfig(options={"max_depth": 0})}
+
+    result = NestingDepthCheck().run(_context(tmp_path, rules))
+
+    assert len(result.findings) == 1
+    assert dict(result.findings[0].properties) == {"depth": 1, "max": 0}
+
+
+def test_nesting_depth_nested_if_counts_two_levels(tmp_path: Path) -> None:
+    source = "def nested(a):\n    if a:\n        if a > 0:\n            pass\n"
+    _write(tmp_path, "nested.py", source)
+    rules = {_MAX_DEPTH_RULE: RuleConfig(options={"max_depth": 1})}
+
+    result = NestingDepthCheck().run(_context(tmp_path, rules))
+
+    assert len(result.findings) == 1
+    assert dict(result.findings[0].properties) == {"depth": 2, "max": 1}
+
+
+def test_nesting_depth_duplicate_names_yield_distinct_findings(tmp_path: Path) -> None:
+    _write(tmp_path, "dupes.py", _DEEP_SOURCE + "\n" + _DEEP_SOURCE)
+
+    report = run_checks((NestingDepthCheck(),), _context(tmp_path), tool=_TOOL)
+
+    findings = [finding for finding in report.findings if finding.check == _MAX_DEPTH_RULE]
+    assert len(findings) == 2
+    assert {finding.symbol for finding in findings} == {"deep", "deep#2"}
+    assert len({finding.fingerprint for finding in findings}) == 2
 
 
 def test_nesting_depth_comprehensions_optional(tmp_path: Path) -> None:
@@ -267,3 +330,18 @@ def test_module_length_counts_only_source_lines(tmp_path: Path) -> None:
     assert default_result.findings == ()
     assert len(strict_result.findings) == 1
     assert dict(strict_result.findings[0].properties) == {"lines": 3, "max": 2}
+
+
+def test_source_lines_counts_hash_inside_multiline_string() -> None:
+    # A '#'-leading line inside a triple-quoted string is source, not a comment.
+    assert _source_lines('x = """\n# not a comment\nfoo\n"""\n') == 4
+
+
+def test_module_length_counts_hash_lines_inside_strings(tmp_path: Path) -> None:
+    _write(tmp_path, "tricky.py", 'x = """\n# not a comment\nfoo\n"""\n')
+    rules = {_MAX_LINES_RULE: RuleConfig(options={"max_lines": 3})}
+
+    result = ModuleLengthCheck().run(_context(tmp_path, rules))
+
+    assert len(result.findings) == 1
+    assert dict(result.findings[0].properties) == {"lines": 4, "max": 3}

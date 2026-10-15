@@ -62,6 +62,7 @@ class FileKind(StrEnum):
     """
 
     PYTHON = "python"
+    STUB = "stub"
     WORKFLOW = "workflow"
     PYPROJECT = "pyproject"
     LOCKFILE = "lockfile"

@@ -1,6 +1,6 @@
 """Deterministic, pure scoring of a finding set.
 
-The formula is fixed and recorded in ``ROADMAP.md`` (Phase 2 decision 1):
+The formula is fixed and recorded in ``ROADMAP.md`` (Phase 2 decision 10):
 each finding subtracts a fixed penalty (scaled by confidence) from its
 category's 100-point baseline; ``by_category`` always contains every category
 in canonical order (zero-finding categories score 100); the overall score is

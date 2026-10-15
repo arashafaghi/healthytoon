@@ -255,7 +255,9 @@ def classify_file(path: Path | str) -> FileKind:
     name = candidate.name
     suffix = candidate.suffix.lower()
 
-    if suffix in {".py", ".pyi"}:
+    if suffix == ".pyi":
+        return FileKind.STUB
+    if suffix == ".py":
         return FileKind.PYTHON
     if name in _WORKFLOW_NAMES:
         return FileKind.WORKFLOW

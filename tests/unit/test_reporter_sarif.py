@@ -11,12 +11,14 @@ from healthytoon.core.types import (
     FINGERPRINT_ALGORITHM,
     Category,
     CategoryScore,
+    CheckOutcome,
     Finding,
     Location,
     Remediation,
     Report,
     Score,
     Severity,
+    Status,
     Summary,
     TargetInfo,
     ToolInfo,
@@ -34,11 +36,16 @@ def _finding(
     file: str | None = "pkg/mod.py",
     line: int | None = 12,
     column: int | None = None,
+    end_line: int | None = None,
     remediation: Remediation | None = None,
     fingerprint: str = "fp00000000000001",
     category: Category = Category.MAINTAINABILITY,
 ) -> Finding:
-    location = Location(file=file, line=line, column=column) if file is not None else None
+    location = (
+        Location(file=file, line=line, column=column, end_line=end_line)
+        if file is not None
+        else None
+    )
     return Finding(
         rule_id=rule_id,
         check="test.check",
@@ -58,6 +65,7 @@ def _report(
     grade: str = "A",
     overall: float = 100.0,
     by_category: tuple[CategoryScore, ...] = (),
+    outcomes: tuple[CheckOutcome, ...] = (),
 ) -> Report:
     return Report(
         tool=ToolInfo(name="healthytoon", version="0.1.0"),
@@ -67,11 +75,20 @@ def _report(
             score=Score(overall=overall, grade=grade, by_category=by_category),
         ),
         findings=findings,
+        outcomes=outcomes,
     )
+
+
+def _outcome(check: str, status: Status, message: str | None = None) -> CheckOutcome:
+    return CheckOutcome(check=check, status=status, message=message)
 
 
 def _payload(findings: tuple[Finding, ...]) -> Any:
     return json.loads(SarifReporter().render(_report(findings)))
+
+
+def _render(report: Report) -> Any:
+    return json.loads(SarifReporter().render(report))
 
 
 def _run(findings: tuple[Finding, ...]) -> Any:
@@ -87,6 +104,54 @@ def test_top_level_document_shape() -> None:
     driver = payload["runs"][0]["tool"]["driver"]
     assert driver["name"] == "healthytoon"
     assert driver["version"] == "0.1.0"
+
+
+def test_invocations_always_present_with_empty_notifications() -> None:
+    invocation = _render(_report([_finding()]))["runs"][0]["invocations"][0]
+    assert invocation["executionSuccessful"] is True
+    assert invocation["toolExecutionNotifications"] == []
+
+
+def test_execution_successful_false_when_a_check_errored() -> None:
+    report = _report(outcomes=(_outcome("check.a", Status.ERROR, "boom"),))
+    invocation = _render(report)["runs"][0]["invocations"][0]
+    assert invocation["executionSuccessful"] is False
+
+
+def test_execution_successful_true_without_an_error_outcome() -> None:
+    report = _report(
+        outcomes=(
+            _outcome("check.a", Status.PASS),
+            _outcome("check.b", Status.SKIP, "not applicable"),
+        )
+    )
+    invocation = _render(report)["runs"][0]["invocations"][0]
+    assert invocation["executionSuccessful"] is True
+
+
+def test_outcomes_surface_error_and_skip_notifications_in_order() -> None:
+    report = _report(
+        outcomes=(
+            _outcome("check.error", Status.ERROR, "check crashed"),
+            _outcome("check.pass", Status.PASS),
+            _outcome("check.skip", Status.SKIP),
+        )
+    )
+    notifications = _render(report)["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    assert [notification["descriptor"]["id"] for notification in notifications] == [
+        "check.error",
+        "check.skip",
+    ]
+    assert notifications[0]["level"] == "error"
+    assert notifications[0]["message"] == {"text": "check crashed"}
+    assert notifications[1]["level"] == "note"
+    assert notifications[1]["message"] == {"text": "skip"}
+
+
+def test_notification_message_falls_back_to_status_value() -> None:
+    report = _report(outcomes=(_outcome("check.error", Status.ERROR),))
+    notification = _render(report)["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]
+    assert notification["message"] == {"text": "error"}
 
 
 @pytest.mark.parametrize(
@@ -129,6 +194,18 @@ def test_location_region_defaults_to_one() -> None:
     result = _run((_finding(line=None, column=None),))["results"][0]
     region = result["locations"][0]["physicalLocation"]["region"]
     assert region == {"startLine": 1, "startColumn": 1}
+
+
+def test_region_preserves_end_line_when_set() -> None:
+    result = _run((_finding(line=12, end_line=18),))["results"][0]
+    region = result["locations"][0]["physicalLocation"]["region"]
+    assert region["endLine"] == 18
+
+
+def test_region_omits_end_line_when_unset() -> None:
+    result = _run((_finding(line=12),))["results"][0]
+    region = result["locations"][0]["physicalLocation"]["region"]
+    assert "endLine" not in region
 
 
 def test_windows_path_is_normalized_to_posix() -> None:

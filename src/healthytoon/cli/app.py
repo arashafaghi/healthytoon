@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    check = subparsers.add_parser("check", help="audit one or more target directories")
+    check = subparsers.add_parser("check", help="audit the target directory")
     check.add_argument("paths", nargs="*", default=["."], help="target directory (default: .)")
     check.add_argument("--config", metavar="PATH", help="explicit configuration file")
     check.add_argument(

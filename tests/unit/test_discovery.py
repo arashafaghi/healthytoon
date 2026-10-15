@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from healthytoon.core.discovery import discover_files, iter_python_files
+from healthytoon.core.discovery import classify_file, discover_files, iter_python_files
+from healthytoon.core.types import FileKind
 from healthytoon.errors import TargetError
 
 
@@ -154,3 +155,8 @@ def test_iter_python_files_filters_suffix(tmp_path: Path) -> None:
     txt = _write(tmp_path / "b.txt")
 
     assert iter_python_files((py, txt)) == (py,)
+
+
+def test_classify_file_distinguishes_stubs_from_python() -> None:
+    assert classify_file("pkg/mod.pyi") is FileKind.STUB
+    assert classify_file("pkg/mod.py") is FileKind.PYTHON

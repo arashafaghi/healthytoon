@@ -25,6 +25,13 @@
 - Delegate user-facing documentation to `@docs-writer`.
 - The builder may handle small or tightly coupled tasks directly when delegation
   would add unnecessary overhead.
+- The builder owns phase boundaries and review baselines.
+- After acceptance, commit the phase unless the user says otherwise.
+- Every review must identify its base commit and review only changes since that baseline, plus relevant surrounding context.
+- Include untracked files and deleted/renamed files in the review scope.
+- Maintain a lightweight review ledger: phase, base commit, reviewed commit, findings, dispositions.
+- Don't re-review unchanged code without a concrete reason.
+- Don't start the next phase until the current phase's review findings and acceptance criteria are resolved.
 
 ## Agent reporting
 

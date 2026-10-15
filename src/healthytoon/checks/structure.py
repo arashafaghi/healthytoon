@@ -8,7 +8,9 @@ use repo-relative POSIX paths so reports are deterministic across machines.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+import io
+import tokenize
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from healthytoon.core.context import CheckContext
@@ -101,15 +103,45 @@ def _result(check_id: str, findings: list[Finding]) -> CheckResult:
     return CheckResult(check=check_id, findings=tuple(findings), status=status)
 
 
-def _source_lines(text: str) -> int:
-    """Count source lines: every non-blank line that is not purely a comment."""
+#: Token types that carry no source-line content of their own.
+_NON_SOURCE_TOKENS = frozenset(
+    {
+        tokenize.COMMENT,
+        tokenize.NL,
+        tokenize.NEWLINE,
+        tokenize.INDENT,
+        tokenize.DEDENT,
+        tokenize.ENCODING,
+        tokenize.ENDMARKER,
+    }
+)
 
-    count = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            count += 1
-    return count
+
+def _non_blank_lines(text: str) -> int:
+    """Count lines that contain at least one non-whitespace character."""
+
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
+def _source_lines(text: str) -> int:
+    """Count source lines: physical lines covered by tokens that carry code.
+
+    Counting from tokens (rather than by stripped line prefixes) keeps ``#``
+    characters that appear inside triple-quoted strings or other multi-line
+    tokens from being mistaken for comments. Multi-line tokens such as strings
+    contribute every physical line they span. Text that cannot be tokenized
+    falls back to a plain non-blank line count.
+    """
+
+    lines: set[int] = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type in _NON_SOURCE_TOKENS:
+                continue
+            lines.update(range(token.start[0], token.end[0] + 1))
+    except (tokenize.TokenError, IndentationError):
+        return _non_blank_lines(text)
+    return len(lines)
 
 
 class _FunctionCollector(ast.NodeVisitor):
@@ -143,6 +175,43 @@ class _FunctionCollector(ast.NodeVisitor):
         self._scope.pop()
 
 
+def _disambiguate_functions(
+    functions: Sequence[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]],
+) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Append an occurrence index to repeated qualified names within one file.
+
+    Two definitions can share a qualified name (conditional definitions or an
+    ``@overload`` stub next to its implementation). Fingerprints are built from
+    rule id, file, and symbol, so repeated names must be disambiguated or the
+    runner would collapse one finding into the other. The first occurrence keeps
+    its name; later ones become ``name#2``, ``name#3``, and so on.
+    """
+
+    seen: dict[str, int] = {}
+    unique: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = []
+    for name, node in functions:
+        index = seen.get(name, 0) + 1
+        seen[name] = index
+        unique.append((name if index == 1 else f"{name}#{index}", node))
+    return unique
+
+
+def _is_elif_continuation(parent: ast.AST, child: ast.AST) -> bool:
+    """True when ``child`` is the ``If`` that an ``elif`` desugars to.
+
+    Python represents ``elif`` as an :class:`ast.If` sitting as the sole element
+    of the parent ``If``'s ``orelse``. That is a sibling branch, not a deeper
+    nesting, so it must be measured at the parent's depth.
+    """
+
+    return (
+        isinstance(parent, ast.If)
+        and isinstance(child, ast.If)
+        and len(parent.orelse) == 1
+        and parent.orelse[0] is child
+    )
+
+
 def _max_nesting_depth(
     node: ast.AST,
     depth: int,
@@ -161,11 +230,12 @@ def _max_nesting_depth(
         if isinstance(child, _SCOPE_NODES):
             continue
         child_depth = depth
-        if (
+        counts_as_control_flow = (
             isinstance(child, _CONTROL_FLOW)
             or (count_comprehensions and isinstance(child, _COMPREHENSIONS))
             or (count_lambdas and isinstance(child, ast.Lambda))
-        ):
+        )
+        if counts_as_control_flow and not _is_elif_continuation(node, child):
             child_depth += 1
         deepest = max(
             deepest,
@@ -208,7 +278,7 @@ class FunctionLengthCheck:
             file = _relative_posix(path, ctx.root)
             collector = _FunctionCollector()
             collector.visit(module)
-            for symbol, node in collector.functions:
+            for symbol, node in _disambiguate_functions(collector.functions):
                 end_line = node.end_lineno if node.end_lineno is not None else node.lineno
                 length = end_line - node.lineno + 1
                 if length <= max_length:
@@ -274,7 +344,7 @@ class NestingDepthCheck:
             file = _relative_posix(path, ctx.root)
             collector = _FunctionCollector()
             collector.visit(module)
-            for symbol, node in collector.functions:
+            for symbol, node in _disambiguate_functions(collector.functions):
                 depth = _max_nesting_depth(
                     node,
                     0,

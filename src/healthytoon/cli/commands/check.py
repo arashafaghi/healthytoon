@@ -32,6 +32,12 @@ __all__ = ["run"]
 def run(args: argparse.Namespace) -> int:
     """Resolve config and checks, run them, render the report, and apply the gate."""
 
+    if len(args.paths) > 1:
+        raise UsageError(
+            "check accepts a single target directory, got "
+            f"{len(args.paths)}: {', '.join(args.paths)}"
+        )
+
     target = Path(args.paths[0])
     if not target.exists() or not target.is_dir():
         raise TargetError(f"target is not a directory: {target}")

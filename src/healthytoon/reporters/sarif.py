@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import json
 
-from healthytoon.core.types import FINGERPRINT_ALGORITHM, Finding, Report
+from healthytoon.core.types import (
+    FINGERPRINT_ALGORITHM,
+    CheckOutcome,
+    Finding,
+    Report,
+    Status,
+)
 
 __all__ = ["SarifReporter"]
 
 _SCHEMA_URI = "https://json.schemastore.org/sarif-2.1.0.json"
+
+#: SARIF notification level for a check outcome status.
+_STATUS_NOTIFICATION_LEVEL = {
+    Status.ERROR: "error",
+    Status.SKIP: "note",
+}
 
 
 class SarifReporter:
@@ -23,6 +35,7 @@ class SarifReporter:
             "runs": [
                 {
                     "tool": {"driver": _driver(report)},
+                    "invocations": _invocations(report),
                     "results": [_result(finding) for finding in report.findings],
                 }
             ],
@@ -57,6 +70,34 @@ def _rules(findings: tuple[Finding, ...]) -> list[dict[str, object]]:
     return [rules[rule_id] for rule_id in sorted(rules)]
 
 
+def _invocations(report: Report) -> list[dict[str, object]]:
+    """Summarize run health, surfacing errored and skipped checks.
+
+    ``invocations`` is always present so consumers can read
+    ``executionSuccessful`` even when every check passed.
+    """
+
+    notifications = [
+        _notification(outcome)
+        for outcome in report.outcomes
+        if outcome.status in _STATUS_NOTIFICATION_LEVEL
+    ]
+    return [
+        {
+            "executionSuccessful": not report.analysis_incomplete,
+            "toolExecutionNotifications": notifications,
+        }
+    ]
+
+
+def _notification(outcome: CheckOutcome) -> dict[str, object]:
+    return {
+        "level": _STATUS_NOTIFICATION_LEVEL[outcome.status],
+        "descriptor": {"id": outcome.check},
+        "message": {"text": outcome.message or outcome.status.value},
+    }
+
+
 def _result(finding: Finding) -> dict[str, object]:
     result: dict[str, object] = {
         "ruleId": finding.rule_id,
@@ -66,14 +107,17 @@ def _result(finding: Finding) -> dict[str, object]:
     }
     location = finding.location
     if location is not None:
+        region: dict[str, object] = {
+            "startLine": location.line or 1,
+            "startColumn": location.column or 1,
+        }
+        if location.end_line is not None:
+            region["endLine"] = location.end_line
         result["locations"] = [
             {
                 "physicalLocation": {
                     "artifactLocation": {"uri": location.file.replace("\\", "/")},
-                    "region": {
-                        "startLine": location.line or 1,
-                        "startColumn": location.column or 1,
-                    },
+                    "region": region,
                 }
             }
         ]
