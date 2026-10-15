@@ -1,17 +1,50 @@
 [project]
 name = "healthytoon"
 version = "0.1.0"
-description = "Add your description here"
+description = "Audit Python repositories for maintainability and CI/CD health."
 readme = "README.md"
 authors = [
     { name = "Arash Afaghi", email = "afaghi@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ruamel.yaml>=0.18",
+]
+
+[project.optional-dependencies]
+# Optional analysis backend (Phase 2a T2a.2): detected at runtime; when absent,
+# complexity analysis is reported as skipped. Vulture is an external tool and is
+# intentionally not a Python dependency.
+analysis = ["radon>=6.0.1"]
 
 [project.scripts]
-healthytoon = "healthytoon:main"
+healthytoon = "healthytoon.cli.app:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.100",
+    "jsonschema>=4.21",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
