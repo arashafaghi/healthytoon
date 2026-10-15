@@ -22,7 +22,7 @@ It should provide deterministic findings, actionable reports, and a consistent s
 
 - `core/`: shared types, discovery, context, registry, runner, policy, scoring, and protocols.
 - `config/`: configuration models, defaults, loading, merging, and validation.
-- `cli/`: command-line interface and commands.
+- `cli/`: command-line interface and commands. use Typer lib
 - `reporters/`: terminal, JSON, SARIF, and Markdown output.
 - `checks/`: maintainability checks.
 - `cicd/`: CI/CD configuration loading, platform adapters, intermediate representation, and checks.

@@ -44,11 +44,35 @@ class SarifReporter:
 
 
 def _driver(report: Report) -> dict[str, object]:
-    return {
+    driver: dict[str, object] = {
         "name": report.tool.name,
         "version": report.tool.version,
         "rules": _rules(report.findings),
     }
+    descriptors = _notification_descriptors(report)
+    if descriptors:
+        driver["notifications"] = descriptors
+    return driver
+
+
+def _notification_descriptors(report: Report) -> list[dict[str, object]]:
+    """Register descriptors for checks that emit notifications.
+
+    SARIF notification ``descriptor.id`` references must resolve within the
+    driver's reporting descriptors; checks are not rules, so we register them
+    under ``driver.notifications``.
+    """
+
+    seen: dict[str, dict[str, object]] = {}
+    for outcome in report.outcomes:
+        if outcome.status not in _STATUS_NOTIFICATION_LEVEL or outcome.check in seen:
+            continue
+        seen[outcome.check] = {
+            "id": outcome.check,
+            "name": outcome.check,
+            "shortDescription": {"text": f"Check {outcome.check}"},
+        }
+    return [seen[check_id] for check_id in sorted(seen)]
 
 
 def _rules(findings: tuple[Finding, ...]) -> list[dict[str, object]]:

@@ -31,9 +31,12 @@ uv run healthytoon check .    # audit the current directory
 
 `list` prints one line per registered check: id, category, default severity (for example `maintainability.function_length  maintainability  medium`).
 
-`check` prints a grade line, a findings summary, and one line per finding. A repository with issues reports findings and a grade below A, and exits 0 unless a finding is at or above the `--fail-on` threshold (default `high`); exact scores and counts depend on the repository audited.
+`check` prints a grade line and, when there are findings, a `<N> findings: …` summary followed by one line per finding. A clean run prints `No findings.` instead. When a check is skipped or errored, an additional `checks: <ran> ran, <skipped> skipped, <errored> errored` line is printed and each errored check is listed as `error: <check id>: <message>`. The command exits 0 unless a finding is at or above the `--fail-on` threshold (default `high`), or a check errored (exit 5); exact scores and counts depend on the repository audited.
 
 ```
+healthytoon <version> — grade <A-F> (<0-100>/100)
+No findings.
+# or, when issues exist:
 healthytoon <version> — grade <A-F> (<0-100>/100)
 <N> findings: <severity counts>
 <path>:<line> <SEVERITY> <HT-RULE-ID> <message>

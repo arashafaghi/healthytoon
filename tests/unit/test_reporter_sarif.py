@@ -154,6 +154,30 @@ def test_notification_message_falls_back_to_status_value() -> None:
     assert notification["message"] == {"text": "error"}
 
 
+def test_notification_descriptors_are_registered_on_driver() -> None:
+    report = _report(
+        outcomes=(
+            _outcome("check.error", Status.ERROR, "boom"),
+            _outcome("check.skip", Status.SKIP),
+        )
+    )
+    rendered = _render(report)
+    driver = rendered["runs"][0]["tool"]["driver"]
+    descriptor_ids = {descriptor["id"] for descriptor in driver["notifications"]}
+    assert descriptor_ids == {"check.error", "check.skip"}
+    notification_ids = {
+        notification["descriptor"]["id"]
+        for notification in rendered["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+    }
+    assert notification_ids <= descriptor_ids
+
+
+def test_no_notification_descriptors_when_all_checks_pass() -> None:
+    report = _report(outcomes=(_outcome("check.a", Status.PASS),))
+    driver = _render(report)["runs"][0]["tool"]["driver"]
+    assert "notifications" not in driver
+
+
 @pytest.mark.parametrize(
     ("severity", "expected"),
     [
