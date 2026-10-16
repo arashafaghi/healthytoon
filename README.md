@@ -150,7 +150,132 @@ options = { max_length = 50 }
 - `output` — table with `format` (`terminal` | `json` | `sarif` | `markdown`), `color` (`auto` | `always` | `never`), `output` (`-` or a file path), and `context` (integer ≥ 0; when > 0, source-code findings include that many surrounding lines, and each finding's excerpt is shown by the terminal/Markdown reporters and under `properties.context` in SARIF).
 - `rules."<check-id>"` — per-check settings keyed by the **check id** (for example `maintainability.function_length`), **not** by the `HT-*` rule id. An `HT-*` key is accepted but is a silent no-op: it neither selects nor configures a check. Each entry supports `enabled` (bool), `severity` (overrides the check's default severity), and `options` (table).
 
-Per-check `options` (defaults in parentheses): `maintainability.function_length` `max_length` (50); `maintainability.nesting_depth` `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false); `maintainability.module_length` `max_lines` (1000); `maintainability.duplication` `min_tokens` (50), `min_occurrences` (2); `maintainability.complexity` `max_cyclomatic` (10); `maintainability.dead_code` `min_confidence` (60), `whitelist` (empty); `typing.annotation_coverage` `min_ratio` (0.8); `documentation.docstring_coverage` `min_ratio` (0.8). `maintainability.import_cycles` has no options.
+There are **22** built-in rules. Every rule is keyed by its **check id** (not its `HT-*` rule id).
+
+| Check id | Rule id | Category | Default severity | Options (default) |
+| --- | --- | --- | --- | --- |
+| `maintainability.function_length` | `HT-MAINT-001` | maintainability | medium | `max_length` (50) |
+| `maintainability.nesting_depth` | `HT-MAINT-002` | maintainability | medium | `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false) |
+| `maintainability.module_length` | `HT-MAINT-003` | maintainability | low | `max_lines` (1000) |
+| `maintainability.import_cycles` | `HT-MAINT-004` | maintainability | medium | — |
+| `maintainability.duplication` | `HT-MAINT-005` | maintainability | low | `min_tokens` (50), `min_occurrences` (2), `max_findings` (50) |
+| `maintainability.complexity` | `HT-MAINT-006` | maintainability | medium | `max_cyclomatic` (10) |
+| `maintainability.dead_code` | `HT-MAINT-007` | maintainability | low | `min_confidence` (60), `whitelist` ([]) |
+| `typing.annotation_coverage` | `HT-TYPE-001` | typing | low | `min_ratio` (0.8) |
+| `documentation.docstring_coverage` | `HT-DOC-001` | documentation | low | `min_ratio` (0.8) |
+| `ci.workflow_present` | `HT-CI-001` | ci_cd | high | — |
+| `ci.workflow_parse` | `HT-CI-002` | ci_cd | high | — |
+| `ci.tests_present` | `HT-CI-003` | ci_cd | high | — |
+| `ci.actions_pinned` | `HT-CI-004` | ci_cd | high | — |
+| `ci.permissions_explicit` | `HT-CI-005` | ci_cd | medium | — |
+| `ci.python_eol` | `HT-CI-006` | ci_cd | high | — |
+| `ci.python_matrix` | `HT-CI-007` | ci_cd | medium | — |
+| `ci.python_consistency` | `HT-CI-008` | ci_cd | medium | — |
+| `ci.coverage_gate` | `HT-CI-009` | ci_cd | medium | — |
+| `ci.lockfile` | `HT-CI-010` | ci_cd | medium | — |
+| `ci.dependency_updates` | `HT-CI-011` | ci_cd | low | — |
+| `ci.triggers_pull_request` | `HT-CI-012` | ci_cd | medium | — |
+| `ci.secrets` | `HT-SEC-001` | security | critical | — |
+
+Copy-paste configuration for every rule at its defaults; delete the tables you do not need, and remember that changing a rule's `severity` moves its findings, which can change the gate result.
+
+```toml
+[tool.healthytoon.rules."maintainability.function_length"]
+enabled = true
+severity = "medium"
+options = { max_length = 50 }
+
+[tool.healthytoon.rules."maintainability.nesting_depth"]
+enabled = true
+severity = "medium"
+options = { max_depth = 5, count_comprehensions = false, count_lambdas = false }
+
+[tool.healthytoon.rules."maintainability.module_length"]
+enabled = true
+severity = "low"
+options = { max_lines = 1000 }
+
+[tool.healthytoon.rules."maintainability.import_cycles"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."maintainability.duplication"]
+enabled = true
+severity = "low"
+options = { min_tokens = 50, min_occurrences = 2, max_findings = 50 }
+
+[tool.healthytoon.rules."maintainability.complexity"]
+enabled = true
+severity = "medium"
+options = { max_cyclomatic = 10 }
+
+[tool.healthytoon.rules."maintainability.dead_code"]
+enabled = true
+severity = "low"
+options = { min_confidence = 60, whitelist = [] }
+
+[tool.healthytoon.rules."typing.annotation_coverage"]
+enabled = true
+severity = "low"
+options = { min_ratio = 0.8 }
+
+[tool.healthytoon.rules."documentation.docstring_coverage"]
+enabled = true
+severity = "low"
+options = { min_ratio = 0.8 }
+
+[tool.healthytoon.rules."ci.workflow_present"]
+enabled = true
+severity = "high"
+
+[tool.healthytoon.rules."ci.workflow_parse"]
+enabled = true
+severity = "high"
+
+[tool.healthytoon.rules."ci.tests_present"]
+enabled = true
+severity = "high"
+
+[tool.healthytoon.rules."ci.actions_pinned"]
+enabled = true
+severity = "high"
+
+[tool.healthytoon.rules."ci.permissions_explicit"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.python_eol"]
+enabled = true
+severity = "high"
+
+[tool.healthytoon.rules."ci.python_matrix"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.python_consistency"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.coverage_gate"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.lockfile"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.dependency_updates"]
+enabled = true
+severity = "low"
+
+[tool.healthytoon.rules."ci.triggers_pull_request"]
+enabled = true
+severity = "medium"
+
+[tool.healthytoon.rules."ci.secrets"]
+enabled = true
+severity = "critical"
+```
 
 ## Severity and scoring
 
