@@ -65,13 +65,15 @@ def _patch_entry_points(monkeypatch: pytest.MonkeyPatch, points: object) -> None
     monkeypatch.setattr(importlib.metadata, "entry_points", fake_entry_points)
 
 
-#: Stable registration order of the checks bundled with Healthytoon (T2a.1a).
+#: Stable registration order of the checks bundled with Healthytoon (T2a.1a/T2a.1b).
 _BUILTIN_IDS: tuple[str, ...] = (
     "maintainability.function_length",
     "maintainability.nesting_depth",
     "maintainability.module_length",
     "typing.annotation_coverage",
     "documentation.docstring_coverage",
+    "maintainability.import_cycles",
+    "maintainability.duplication",
 )
 
 

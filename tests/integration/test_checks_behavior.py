@@ -25,6 +25,8 @@ BUILTIN_CHECK_IDS: tuple[str, ...] = (
     "maintainability.module_length",
     "typing.annotation_coverage",
     "documentation.docstring_coverage",
+    "maintainability.import_cycles",
+    "maintainability.duplication",
 )
 
 
@@ -205,7 +207,7 @@ def test_clean_module_produces_no_builtin_findings(
     assert code == 0
     assert payload["findings"] == []
     assert payload["summary"]["total"] == 0
-    # All five built-ins were applicable and ran; none of them fired.
+    # All seven built-ins were applicable and ran; none of them fired.
     assert set(_checks_run(payload)) == set(BUILTIN_CHECK_IDS)
 
 

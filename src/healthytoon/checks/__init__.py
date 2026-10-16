@@ -8,7 +8,9 @@ so reports and tests stay deterministic.
 from __future__ import annotations
 
 from healthytoon.checks.annotations import AnnotationCoverageCheck
+from healthytoon.checks.cycles import ImportCycleCheck
 from healthytoon.checks.docstrings import DocstringCoverageCheck
+from healthytoon.checks.duplication import DuplicationCheck
 from healthytoon.checks.structure import (
     FunctionLengthCheck,
     ModuleLengthCheck,
@@ -28,4 +30,6 @@ def builtin_checks() -> tuple[Check, ...]:
         ModuleLengthCheck(),
         AnnotationCoverageCheck(),
         DocstringCoverageCheck(),
+        ImportCycleCheck(),
+        DuplicationCheck(),
     )

@@ -13,6 +13,17 @@ _EXPECTED_IDS: tuple[str, ...] = (
     "maintainability.module_length",
     "typing.annotation_coverage",
     "documentation.docstring_coverage",
+    "maintainability.import_cycles",
+    "maintainability.duplication",
+)
+
+#: Structural checks that operate on a single file's AST.
+_AST_STRUCTURAL_IDS: frozenset[str] = frozenset(
+    {
+        "maintainability.function_length",
+        "maintainability.nesting_depth",
+        "maintainability.module_length",
+    }
 )
 
 
@@ -31,7 +42,7 @@ def test_builtin_checks_satisfy_the_check_protocol() -> None:
     for check in checks.builtin_checks():
         assert isinstance(check, Check)
         assert check.api_version == CHECK_API_VERSION
-        assert check.cross_file is False
+        assert isinstance(check.cross_file, bool)
         assert check.file_kinds == frozenset({FileKind.PYTHON})
         assert check.category in (
             Category.MAINTAINABILITY,
@@ -39,6 +50,12 @@ def test_builtin_checks_satisfy_the_check_protocol() -> None:
             Category.DOCUMENTATION,
         )
         assert isinstance(check.default_severity, Severity)
+
+
+def test_structural_ast_checks_are_single_file() -> None:
+    for check in checks.builtin_checks():
+        if check.id in _AST_STRUCTURAL_IDS:
+            assert check.cross_file is False
 
 
 def test_registry_all_checks_includes_builtins_first() -> None:
