@@ -1,25 +1,36 @@
-"""Healthytoon command-line entry point and argument parsing.
+"""Healthytoon command-line entry point, built with :mod:`typer`.
 
-The parser is built from the standard library's :mod:`argparse` only. Argument
-errors therefore keep argparse's own ``SystemExit(2)``; only failures raised by
-the command handlers are translated into the documented exit codes.
+The command tree lives here; each command's implementation lives in
+:mod:`healthytoon.cli.commands`. The public entry point :func:`main` keeps the
+historical contract:
+
+* it returns the process exit code instead of raising ``SystemExit`` for
+  normal or error paths, and
+* it maps every documented failure onto a distinct code
+  (0 OK / 1 findings / 2 usage / 3 config / 4 target / 5 internal / 130
+  interrupted).
+
+It does so by invoking the Typer app with ``standalone_mode=False`` and
+translating the exceptions Click/Typer raise back into return values.
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
 import traceback
 from collections.abc import Sequence
 
+import click
+import typer
+
 from healthytoon import __version__
 from healthytoon.cli.commands import check as check_command
+from healthytoon.cli.commands import get_verbose_level
 from healthytoon.cli.commands import list as list_command
 from healthytoon.cli.commands import version as version_command
-from healthytoon.errors import EXIT_INTERNAL, HealthytoonError
-from healthytoon.reporters import available
+from healthytoon.errors import EXIT_INTERNAL, EXIT_USAGE, HealthytoonError
 
-__all__ = ["build_parser", "main"]
+__all__ = ["app", "main"]
 
 _INTERRUPTED_EXIT = 130
 
@@ -32,83 +43,90 @@ def _configure_streams() -> None:
         reconfigure(errors="replace")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the ``healthytoon`` argument parser."""
+def _version_callback(value: bool) -> None:
+    """Print the tool version and exit (``healthytoon --version``)."""
 
-    parser = argparse.ArgumentParser(
-        prog="healthytoon",
-        description="Audit Python repositories for maintainability and CI/CD health.",
-    )
-    parser.add_argument(
+    if value:
+        typer.echo(f"healthytoon {__version__}")
+        raise typer.Exit()
+
+
+def _system_exit_code(exc: SystemExit) -> int:
+    """Translate a stray ``SystemExit`` into a return code."""
+
+    code = exc.code
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    print(code, file=sys.stderr)
+    return EXIT_INTERNAL
+
+
+app = typer.Typer(
+    name="healthytoon",
+    help="Audit Python repositories for maintainability and CI/CD health.",
+    no_args_is_help=True,
+    add_completion=False,
+    pretty_exceptions_enable=False,
+)
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
         "--version",
-        action="version",
-        version=f"healthytoon {__version__}",
+        callback=_version_callback,
+        is_eager=True,
         help="print the Healthytoon version and exit",
-    )
+    ),
+) -> None:
+    """Audit Python repositories for maintainability and CI/CD health."""
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    check = subparsers.add_parser("check", help="audit the target directory")
-    check.add_argument("paths", nargs="*", default=["."], help="target directory (default: .)")
-    check.add_argument("--config", metavar="PATH", help="explicit configuration file")
-    check.add_argument(
-        "--format",
-        choices=available(),
-        help="report format",
-    )
-    check.add_argument(
-        "-o",
-        "--output",
-        metavar="PATH",
-        help="write the report to PATH ('-' for stdout)",
-    )
-    check.add_argument(
-        "--fail-on",
-        choices=("critical", "high", "medium", "low", "info", "none"),
-        help="minimum severity that fails the gate",
-    )
-    check.add_argument("--only", action="append", help="run only the named check (repeatable)")
-    check.add_argument("--skip", action="append", help="skip the named check (repeatable)")
-    check.add_argument("--exclude", action="append", help="exclude a path glob (repeatable)")
-    check.add_argument("--color", choices=("auto", "always", "never"), help="color output mode")
-    check.add_argument("-v", "--verbose", action="count", default=0, help="increase verbosity")
-    check.add_argument("-q", "--quiet", action="count", default=0, help="suppress human output")
-    check.add_argument("--no-progress", action="store_true", help="disable progress reporting")
-    check.add_argument("--jobs", type=int, default=None, help="maximum parallel workers")
-    check.set_defaults(handler=check_command.run)
-
-    list_parser = subparsers.add_parser("list", help="list the registered checks")
-    list_parser.add_argument("--category", help="restrict to a single category")
-    list_parser.set_defaults(handler=list_command.run)
-
-    version = subparsers.add_parser("version", help="print version information")
-    version.set_defaults(handler=version_command.run)
-
-    return parser
+app.command("check")(check_command.run)
+app.command("list")(list_command.run)
+app.command("version")(version_command.run)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse ``argv``, dispatch to a command, and return an exit code.
+    """Run the CLI and return its process exit code.
 
-    argparse's own ``SystemExit`` (raised for ``--help``, ``--version``, and bad
-    usage) is deliberately not caught so it propagates unchanged.
+    ``argv`` defaults to ``sys.argv[1:]`` when ``None``. Nothing is raised for
+    normal or error paths; the return value is always a valid exit code.
     """
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
     _configure_streams()
+    args = list(argv) if argv is not None else None
 
     try:
-        return int(args.handler(args))
-    except HealthytoonError as exc:
-        print(f"healthytoon: error: {exc}", file=sys.stderr)
-        return exc.exit_code
+        result = app(args=args, standalone_mode=False)
+    except click.exceptions.Exit as exc:
+        # ``typer.Exit`` is an alias of ``click.exceptions.Exit``; Click already
+        # returns the code for help/version in non-standalone mode, so this is
+        # a defensive guard.
+        return int(exc.exit_code)
+    except click.UsageError as exc:
+        # ``click.BadParameter`` and ``typer.BadParameter`` are subclasses.
+        exc.show()
+        return EXIT_USAGE
+    except click.exceptions.Abort:
+        # ``typer.Abort`` is an alias of ``click.exceptions.Abort``.
+        print("healthytoon: interrupted", file=sys.stderr)
+        return _INTERRUPTED_EXIT
     except KeyboardInterrupt:
         print("healthytoon: interrupted", file=sys.stderr)
         return _INTERRUPTED_EXIT
+    except HealthytoonError as exc:
+        print(f"healthytoon: error: {exc}", file=sys.stderr)
+        return exc.exit_code
+    except SystemExit as exc:
+        return _system_exit_code(exc)
     except Exception as exc:  # noqa: BLE001 - last-resort guard for the CLI boundary
-        if getattr(args, "verbose", 0) >= 1:
+        if get_verbose_level() >= 1:
             traceback.print_exc()
         print(f"healthytoon: internal error: {exc}", file=sys.stderr)
         return EXIT_INTERNAL
+
+    return int(result) if result is not None else 0

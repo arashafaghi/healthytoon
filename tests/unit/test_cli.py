@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from pytest import CaptureFixture, MonkeyPatch
 
 from healthytoon import __version__
@@ -89,15 +88,45 @@ class _CrashingCheck:
         raise RuntimeError("synthetic crash")
 
 
+class _InterruptingCheck:
+    """Concrete check that interrupts the process, for the 130 contract."""
+
+    id = "fake.interrupt"
+    category = Category.MAINTAINABILITY
+    default_severity = Severity.HIGH
+    api_version = CHECK_API_VERSION
+    cross_file = False
+    file_kinds: frozenset[FileKind] = frozenset()
+
+    def supports(self, ctx: CheckContext) -> bool:
+        return True
+
+    def run(self, ctx: CheckContext) -> CheckResult:
+        raise KeyboardInterrupt
+
+
 def test_version_subcommand(capsys: CaptureFixture[str]) -> None:
     assert main(["version"]) == 0
     assert __version__ in capsys.readouterr().out
 
 
-def test_global_version_flag() -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["--version"])
-    assert excinfo.value.code == 0
+def test_global_version_flag(capsys: CaptureFixture[str]) -> None:
+    assert main(["--version"]) == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_help_option_returns_zero(capsys: CaptureFixture[str]) -> None:
+    assert main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "check" in output
+    assert "version" in output
+
+
+def test_check_help_option_returns_zero(capsys: CaptureFixture[str]) -> None:
+    assert main(["check", "--help"]) == 0
+    output = capsys.readouterr().out
+    assert "--fail-on" in output
+    assert "--format" in output
 
 
 def test_list_returns_zero() -> None:
@@ -144,19 +173,15 @@ def test_check_multiple_targets_exits_usage(tmp_path: Path, capsys: CaptureFixtu
     dir_b = _make_target(tmp_path / "b")
 
     assert main(["check", str(dir_a), str(dir_b)]) == EXIT_USAGE
-    assert "single target directory" in capsys.readouterr().err
+    assert "unexpected extra argument" in capsys.readouterr().err
 
 
 def test_unknown_subcommand_exits_two() -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["bogus"])
-    assert excinfo.value.code == 2
+    assert main(["bogus"]) == EXIT_USAGE
 
 
 def test_unknown_flag_exits_two() -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["check", "--bogus"])
-    assert excinfo.value.code == 2
+    assert main(["check", "--bogus"]) == EXIT_USAGE
 
 
 def test_check_json_format(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
@@ -192,9 +217,7 @@ def test_check_markdown_format(tmp_path: Path, capsys: CaptureFixture[str]) -> N
 def test_check_bogus_format_exits_two(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
 
-    with pytest.raises(SystemExit) as excinfo:
-        main(["check", str(target), "--format", "bogus"])
-    assert excinfo.value.code == 2
+    assert main(["check", str(target), "--format", "bogus"]) == EXIT_USAGE
 
 
 def test_check_output_file(tmp_path: Path) -> None:
@@ -206,9 +229,7 @@ def test_check_output_file(tmp_path: Path) -> None:
 
 
 def test_fail_on_bogus_exits_two(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["check", str(tmp_path), "--fail-on", "bogus"])
-    assert excinfo.value.code == 2
+    assert main(["check", str(tmp_path), "--fail-on", "bogus"]) == EXIT_USAGE
 
 
 def test_fail_on_none_returns_ok(tmp_path: Path) -> None:
@@ -259,6 +280,13 @@ def test_crashed_check_exits_internal(monkeypatch: MonkeyPatch, tmp_path: Path) 
     monkeypatch.setattr(registry, "all_checks", lambda: {"fake.crash": _CrashingCheck()})
 
     assert main(["check", str(target)]) == 5
+
+
+def test_keyboard_interrupt_exits_130(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    target = _make_target(tmp_path)
+    monkeypatch.setattr(registry, "all_checks", lambda: {"fake.interrupt": _InterruptingCheck()})
+
+    assert main(["check", str(target)]) == 130
 
 
 def test_fail_on_none_with_high_finding_returns_zero(
