@@ -55,7 +55,10 @@ def _assert_duplication_finding(finding: Finding) -> None:
         "tokens": 60,
         "occurrences": 2,
         "files": ["one.py", "two.py"],
+        "locations": ["one.py:1", "two.py:1"],
     }
+    assert "copy-pasted at 2 places" in finding.message
+    assert "one.py:1" in finding.message
     assert finding.remediation is not None
 
 
@@ -101,6 +104,7 @@ def test_duplication_min_tokens_is_configurable(tmp_path: Path) -> None:
         "tokens": 40,
         "occurrences": 2,
         "files": ["one.py", "two.py"],
+        "locations": ["one.py:1", "two.py:1"],
     }
 
 

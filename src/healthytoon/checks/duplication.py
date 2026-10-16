@@ -269,6 +269,30 @@ def _select_eligible(candidates: Sequence[_Candidate]) -> list[_Candidate]:
     return eligible
 
 
+def _occurrence_locations(
+    merged: Sequence[tuple[str, int, int]],
+    files: Mapping[str, Sequence[_Token]],
+) -> list[str]:
+    """Return ``file:line`` for every occurrence, deterministically ordered."""
+
+    return [f"{file}:{files[file][begin][1]}" for file, begin, _ in sorted(merged)]
+
+
+def _span_line_range(
+    merged: Sequence[tuple[str, int, int]],
+    files: Mapping[str, Sequence[_Token]],
+    first_file: str,
+    first_start: int,
+) -> tuple[int, int]:
+    """Return the (start, end) source lines of the anchor occurrence."""
+
+    for file, begin, end in merged:
+        if file == first_file and begin <= first_start < end:
+            return files[file][begin][1], files[file][end - 1][1]
+    line = files[first_file][first_start][1]
+    return line, line
+
+
 def _duplication_finding(
     check: DuplicationCheck,
     candidate: _Candidate,
@@ -278,24 +302,30 @@ def _duplication_finding(
 
     length, occurrences, merged = candidate
     first_file, first_start = min(occurrences)
-    line = files[first_file][first_start][1]
     files_involved = sorted({file for file, _, _ in merged})
     count = len(merged)
+    locations = _occurrence_locations(merged, files)
+    start_line, end_line = _span_line_range(merged, files, first_file, first_start)
+    shown = ", ".join(locations[:5])
+    if len(locations) > 5:
+        shown += f", and {len(locations) - 5} more"
     return Finding(
         rule_id=check.rule_id,
         check=check.id,
         category=check.category,
         severity=check.default_severity,
-        title="Duplicated code",
+        title="Duplicated code block",
         message=(
-            f"{length} tokens duplicated across {count} locations in {len(files_involved)} file(s)"
+            f"This {length}-token block is copy-pasted at {count} places "
+            f"(here lines {start_line}-{end_line}): {shown}"
         ),
-        location=Location(file=first_file, line=line),
-        symbol=f"{first_file}:{line}:{length}",
+        location=Location(file=first_file, line=start_line),
+        symbol=f"{first_file}:{start_line}:{length}",
         properties={
             "tokens": length,
             "occurrences": count,
             "files": files_involved,
+            "locations": locations,
         },
         remediation=Remediation(
             summary="Extract the duplicated block into a shared unit",
