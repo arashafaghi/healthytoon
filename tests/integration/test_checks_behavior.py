@@ -27,6 +27,8 @@ BUILTIN_CHECK_IDS: tuple[str, ...] = (
     "documentation.docstring_coverage",
     "maintainability.import_cycles",
     "maintainability.duplication",
+    "maintainability.complexity",
+    "maintainability.dead_code",
 )
 
 
@@ -91,6 +93,8 @@ _UNDOCUMENTED_MODULE = (
 
 _CLEAN_MODULE = (
     '"""Clean module."""\n'
+    "\n"
+    '__all__ = ["increment"]\n'
     "\n"
     "\n"
     "def increment(value: int) -> int:\n"

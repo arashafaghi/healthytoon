@@ -74,6 +74,8 @@ _BUILTIN_IDS: tuple[str, ...] = (
     "documentation.docstring_coverage",
     "maintainability.import_cycles",
     "maintainability.duplication",
+    "maintainability.complexity",
+    "maintainability.dead_code",
 )
 
 

@@ -15,6 +15,8 @@ _EXPECTED_IDS: tuple[str, ...] = (
     "documentation.docstring_coverage",
     "maintainability.import_cycles",
     "maintainability.duplication",
+    "maintainability.complexity",
+    "maintainability.dead_code",
 )
 
 #: Structural checks that operate on a single file's AST.

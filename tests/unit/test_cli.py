@@ -30,7 +30,8 @@ def _make_clean_target(root: Path) -> Path:
     package = root / "src"
     package.mkdir(parents=True, exist_ok=True)
     (package / "a.py").write_text(
-        '"""Clean module."""\n\n\ndef increment(value: int) -> int:\n'
+        '"""Clean module."""\n\n__all__ = ["increment"]\n\n\n'
+        "def increment(value: int) -> int:\n"
         '    """Return ``value`` plus one."""\n    return value + 1\n',
         encoding="utf-8",
     )

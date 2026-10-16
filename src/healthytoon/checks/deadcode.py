@@ -1,0 +1,342 @@
+"""Dead-code detection through the external Vulture analyzer.
+
+Vulture is an optional external executable, not a Python dependency (ROADMAP
+Phase 2a decision 9). The check shells out to ``vulture --min-confidence`` over
+the discovered Python files, parses its ``path:line: message`` report, and
+turns each non-whitelisted hit into a finding. A small built-in whitelist
+suppresses names that are legitimately "unused" by Python's own rules but
+meaningful to frameworks: pytest tests and fixtures, ``visit_*`` AST visitor
+methods, ``main`` entry points, and names exported through ``__all__``.
+
+When ``vulture`` is not on ``PATH`` (or cannot be launched) the check reports
+``SKIP`` with an explanatory note rather than failing the audit.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+import subprocess
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from healthytoon.checks import _optional
+from healthytoon.core.context import CheckContext
+from healthytoon.core.protocols import CHECK_API_VERSION, CheckResult
+from healthytoon.core.types import (
+    Category,
+    FileKind,
+    Finding,
+    Location,
+    Remediation,
+    Severity,
+    Status,
+)
+
+__all__ = ["DeadCodeCheck"]
+
+#: Vulture confidence percentage below which findings are ignored.
+_DEFAULT_MIN_CONFIDENCE = 60
+#: Upper bound on emitted dead-code findings per run.
+_MAX_FINDINGS = 200
+
+#: Name prefixes treated as framework entry points rather than dead code.
+_FRAMEWORK_NAME_PREFIXES: tuple[str, ...] = ("test_", "pytest_", "visit_")
+#: Exact names treated as framework entry points rather than dead code.
+_FRAMEWORK_NAMES: frozenset[str] = frozenset({"main"})
+
+#: Notes surfaced when the backend is unavailable; tests assert on this text.
+_VULTURE_MISSING_NOTE = "vulture is not installed; dead-code analysis skipped"
+
+#: Trailing ``(NN% confidence)`` suffix Vulture appends to every message.
+_CONFIDENCE_RE = re.compile(r"\s*\((\d+)% confidence\)\s*$")
+#: Quoted identifier inside a Vulture message, e.g. ``unused function 'name'``.
+_QUOTED_NAME_RE = re.compile(r"'([^']+)'")
+
+
+@dataclass(frozen=True, slots=True)
+class _VultureIssue:
+    """One parsed Vulture report line."""
+
+    file: str
+    line: int
+    message: str
+    confidence: int
+    symbol: str | None
+
+
+def _relative_posix(path: Path, root: Path) -> str:
+    """Return ``path`` relative to ``root`` as a POSIX path.
+
+    Falls back to the path itself when it cannot be expressed relative to
+    ``root`` (for example in hand-built test contexts).
+    """
+
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _int_option(options: Mapping[str, object], key: str, default: int) -> int:
+    """Read integer option ``key``; fall back to ``default`` when unusable."""
+
+    value = options.get(key, default)
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _string_list_option(options: Mapping[str, object], key: str) -> tuple[str, ...]:
+    """Read a list-of-strings option; accept a lone string and ignore the rest."""
+
+    value = options.get(key)
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Iterable):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def _result(check_id: str, findings: list[Finding]) -> CheckResult:
+    """Wrap ``findings`` in a :class:`CheckResult` (WARN when anything fired)."""
+
+    status = Status.WARN if findings else Status.PASS
+    return CheckResult(check=check_id, findings=tuple(findings), status=status)
+
+
+def _parse_confidence(message: str) -> tuple[str, int]:
+    """Split a Vulture message into ``(message without suffix, confidence)``."""
+
+    match = _CONFIDENCE_RE.search(message)
+    if match is None:
+        return message, 100
+    return _CONFIDENCE_RE.sub("", message).strip(), int(match.group(1))
+
+
+def _parse_line(line: str) -> _VultureIssue | None:
+    """Parse one ``path:line: message`` Vulture report line, or ``None``."""
+
+    stripped = line.strip()
+    if not stripped:
+        return None
+    file, separator, remainder = stripped.partition(":")
+    if not separator:
+        return None
+    line_field, separator, raw_message = remainder.partition(":")
+    if not separator:
+        return None
+    try:
+        line_number = int(line_field)
+    except ValueError:
+        return None
+    message, confidence = _parse_confidence(raw_message.strip())
+    # Only "unused <kind> '<name>'" messages reference a definition we could
+    # suppress by name; other messages (e.g. unreachable code) quote syntax
+    # keywords such as ``return`` rather than a symbol.
+    symbol: str | None = None
+    if message.startswith("unused "):
+        name_match = _QUOTED_NAME_RE.search(message)
+        if name_match is not None:
+            symbol = name_match.group(1)
+    return _VultureIssue(
+        file=file,
+        line=line_number,
+        message=message,
+        confidence=confidence,
+        symbol=symbol,
+    )
+
+
+def _parse_output(stdout: str) -> list[_VultureIssue]:
+    """Parse every Vulture report line, ignoring anything unrecognizable."""
+
+    issues: list[_VultureIssue] = []
+    for line in stdout.splitlines():
+        issue = _parse_line(line)
+        if issue is not None:
+            issues.append(issue)
+    return issues
+
+
+def _decorator_name(node: ast.expr) -> str | None:
+    """Return the terminal name of a decorator expression (``pytest.fixture`` -> ``fixture``)."""
+
+    if isinstance(node, ast.Call):
+        return _decorator_name(node.func)
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Name):
+        return node.id
+    return None
+
+
+def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when ``node`` looks like a pytest fixture (``@fixture``/``@pytest.fixture``)."""
+
+    return any(_decorator_name(decorator) == "fixture" for decorator in node.decorator_list)
+
+
+def _string_elements(value: ast.expr) -> set[str]:
+    """Return the string constants in a list/tuple/set literal."""
+
+    elements: set[str] = set()
+    if not isinstance(value, ast.List | ast.Tuple | ast.Set):
+        return elements
+    for element in value.elts:
+        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+            elements.add(element.value)
+    return elements
+
+
+def _dunder_all_names(module: ast.Module) -> set[str]:
+    """Return the names exported by ``module`` through a top-level ``__all__``."""
+
+    names: set[str] = set()
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    names.update(_string_elements(node.value))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "__all__"
+            and node.value is not None
+        ):
+            names.update(_string_elements(node.value))
+    return names
+
+
+def _framework_whitelist(modules: Sequence[ast.Module], extra: Sequence[str]) -> set[str]:
+    """Collect names the built-in framework rules and the user must not flag."""
+
+    names: set[str] = set(_FRAMEWORK_NAMES)
+    names.update(extra)
+    for module in modules:
+        names.update(_dunder_all_names(module))
+        for node in ast.walk(module):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_fixture(node):
+                names.add(node.name)
+    return names
+
+
+def _is_whitelisted(symbol: str | None, whitelist: frozenset[str]) -> bool:
+    """True when ``symbol`` is protected by an exact or prefix rule."""
+
+    if symbol is None:
+        return False
+    if symbol in whitelist:
+        return True
+    return symbol.startswith(_FRAMEWORK_NAME_PREFIXES)
+
+
+class DeadCodeCheck:
+    """Flag dead code reported by Vulture, minus framework entry points."""
+
+    id: str = "maintainability.dead_code"
+    rule_id: str = "HT-MAINT-007"
+    category: Category = Category.MAINTAINABILITY
+    default_severity: Severity = Severity.LOW
+    api_version: int = CHECK_API_VERSION
+    cross_file: bool = True
+    file_kinds: frozenset[FileKind] = frozenset({FileKind.PYTHON})
+
+    def supports(self, ctx: CheckContext) -> bool:
+        """Run whenever the context contains at least one Python file."""
+
+        return bool(ctx.files_for(self.file_kinds))
+
+    def run(self, ctx: CheckContext) -> CheckResult:
+        """Run Vulture over the discovered files, or skip when it is absent."""
+
+        executable = _optional.vulture_executable()
+        if executable is None:
+            return CheckResult(check=self.id, status=Status.SKIP, notes=_VULTURE_MISSING_NOTE)
+
+        options = ctx.rule_options(
+            self.id,
+            {"min_confidence": _DEFAULT_MIN_CONFIDENCE, "whitelist": []},
+        )
+        min_confidence = _int_option(options, "min_confidence", _DEFAULT_MIN_CONFIDENCE)
+        user_whitelist = _string_list_option(options, "whitelist")
+
+        paths = sorted(ctx.files_for(self.file_kinds))
+        modules = [module for module in (ctx.parse_ast(path) for path in paths) if module]
+        whitelist = frozenset(_framework_whitelist(modules, user_whitelist))
+
+        args = [
+            executable,
+            "--min-confidence",
+            str(min_confidence),
+            *(str(path) for path in paths),
+        ]
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=ctx.root,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return CheckResult(
+                check=self.id,
+                status=Status.SKIP,
+                notes="vulture could not be executed; dead-code analysis skipped",
+            )
+
+        issues = _parse_output(completed.stdout)
+        if not issues and not completed.stdout.strip() and completed.returncode != 0:
+            return CheckResult(
+                check=self.id,
+                status=Status.SKIP,
+                notes=(
+                    f"vulture exited with code {completed.returncode} and produced "
+                    "no output; dead-code analysis skipped"
+                ),
+            )
+
+        findings: list[Finding] = []
+        for issue in issues:
+            if _is_whitelisted(issue.symbol, whitelist):
+                continue
+            file = _relative_posix(Path(issue.file), ctx.root)
+            findings.append(
+                Finding(
+                    rule_id=self.rule_id,
+                    check=self.id,
+                    category=self.category,
+                    severity=self.default_severity,
+                    title="Dead code",
+                    message=issue.message,
+                    location=Location(file=file, line=issue.line),
+                    symbol=issue.symbol,
+                    properties={"confidence": issue.confidence},
+                    remediation=Remediation(
+                        summary="Remove the dead code or reference it explicitly",
+                        detail=(
+                            "Delete the unused definition, or add it to ``__all__`` / "
+                            "the configured whitelist when an external framework "
+                            "imports it dynamically."
+                        ),
+                    ),
+                )
+            )
+
+        findings.sort(
+            key=lambda finding: (
+                finding.location.file if finding.location else "",
+                finding.location.line if finding.location and finding.location.line else 0,
+                finding.symbol or "",
+                finding.message,
+            )
+        )
+        return _result(self.id, findings[:_MAX_FINDINGS])

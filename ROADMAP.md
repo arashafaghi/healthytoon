@@ -124,7 +124,7 @@ Additional confirmed decisions:
 9. **Dependencies:** Radon is optional and detected at runtime; if unavailable, complexity analysis is reported as skipped (no internal McCabe fallback in v1). Vulture is an optional external-tool adapter, not a mandatory runtime dependency. `ruamel.yaml` is a core dependency for the tolerant CI loader.
 10. **Scoring formula:** fixed category weights and a fixed `by_category` shape (every category, with zero-finding categories scoring 100). Penalty table: CRITICAL 40, HIGH 20, MEDIUM 8, LOW 3, INFO 0, scaled by finding confidence. Weights: MAINTAINABILITY 1.0, SECURITY 1.0, CI_CD 0.8, TESTING 0.8, DEPENDENCIES 0.7, TYPING 0.6, DOCUMENTATION 0.5, PACKAGING 0.5. Overall = fixed-weight mean over all categories, capped at 40 when any CRITICAL finding is present. Grades: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, else F. Informational only.
 
-### Phase 2a — Maintainability engine (status: in progress — T2a.1a, T2a.1b complete)
+### Phase 2a — Maintainability engine (status: complete — T2a.1a–T2a.4)
 
 - **T2a.1a — AST structural checks:** Implement function length, nesting depth, module length, annotation coverage, and docstring coverage.
 - **T2a.1b — Dependency and duplication checks:** Implement import-cycle detection and token-based duplication detection.
@@ -134,7 +134,7 @@ Additional confirmed decisions:
 
 **Acceptance criteria:** Realistic fixture projects trigger the expected findings and severities. Tests verify observable CLI results, deterministic output, and relevant failure cases. Each check must have appropriate focused coverage.
 
-### Phase 2b — CI/CD engine (status: not started — waits on agreed scan-scope/check interface)
+### Phase 2b — CI/CD engine (status: in progress)
 
 - **T2b.1 — Loader:** Implement `cicd/loader.py` using a tolerant `ruamel` loader, including YAML `on:` handling, `RawTag`, duplicate-key detection, and file-size limits.
 - **T2b.2 — GitHub adapter:** Parse GitHub Actions workflows into a shared intermediate representation (IR).
