@@ -20,27 +20,30 @@ __all__ = ["all_checks", "builtin_checks", "get_check", "plugin_checks"]
 #: Entry-point group third-party checks register under.
 CHECK_ENTRY_POINT_GROUP = "healthytoon.checks"
 
-#: Module that exposes the bundled checks via a ``builtin_checks()`` factory.
-_BUILTIN_MODULE = "healthytoon.checks"
+#: Modules that expose bundled checks via a stable-order ``builtin_checks()``.
+_BUILTIN_MODULES = ("healthytoon.checks", "healthytoon.cicd")
 
 
 def builtin_checks() -> tuple[Check, ...]:
     """Return the checks bundled with Healthytoon itself.
 
-    The audit engines live in :mod:`healthytoon.checks`; they are imported
-    lazily so that ``import healthytoon.core.registry`` (or a check importing
-    this module) does not eagerly drag every engine in. The engines are
-    expected to expose a stable-order ``builtin_checks()`` factory.
+    The engines live in :mod:`healthytoon.checks` and :mod:`healthytoon.cicd`;
+    they are imported lazily so ``import healthytoon.core.registry`` does not
+    eagerly drag every engine in. Each exposes a stable-order
+    ``builtin_checks()`` factory.
     """
 
-    try:
-        module = importlib.import_module(_BUILTIN_MODULE)
-    except ImportError:
-        return ()
-    factory = getattr(module, "builtin_checks", None)
-    if factory is None:
-        return ()
-    return tuple(factory())
+    checks: list[Check] = []
+    for module_name in _BUILTIN_MODULES:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        factory = getattr(module, "builtin_checks", None)
+        if factory is None:
+            continue
+        checks.extend(factory())
+    return tuple(checks)
 
 
 def plugin_checks() -> tuple[Check, ...]:
