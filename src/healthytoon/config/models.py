@@ -52,6 +52,7 @@ class OutputConfig:
     format: str = "terminal"
     color: str = "auto"
     output: str = "-"
+    context: int = 0
 
 
 @dataclass(frozen=True, slots=True)

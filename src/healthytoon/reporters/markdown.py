@@ -81,18 +81,36 @@ def _finding_sections(findings: tuple[Finding, ...]) -> str:
     blocks: list[str] = []
     for file_key, group in groups.items():
         heading = file_key if file_key else "(no location)"
-        blocks.append(
-            "\n".join(
-                [
-                    f"### {heading}",
-                    "",
-                    "| Severity | Rule | Location | Message | Remediation |",
-                    "| --- | --- | --- | --- | --- |",
-                    *(_row(finding) for finding in group),
-                ]
-            )
-        )
+        block = [
+            f"### {heading}",
+            "",
+            "| Severity | Rule | Location | Message | Remediation |",
+            "| --- | --- | --- | --- | --- |",
+            *(_row(finding) for finding in group),
+        ]
+        block += _evidence_blocks(group)
+        blocks.append("\n".join(block))
     return "\n\n".join(blocks)
+
+
+def _evidence_blocks(findings: list[Finding]) -> list[str]:
+    """Return fenced source-context blocks for findings that carry evidence."""
+
+    blocks: list[str] = []
+    for finding in findings:
+        if not finding.evidence:
+            continue
+        file = finding.location.file if finding.location is not None else ""
+        blocks += ["", f"```{_language(file)}", finding.evidence, "```"]
+    return blocks
+
+
+def _language(path: str) -> str:
+    """Map a file suffix to a fenced-code-block language."""
+
+    return {"py": "python", "pyi": "python", "md": "markdown"}.get(
+        path.rsplit(".", 1)[-1].lower() if "." in path else "", "text"
+    )
 
 
 def _row(finding: Finding) -> str:

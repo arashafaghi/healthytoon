@@ -76,6 +76,7 @@ Audit a target directory (default: `.`). Exactly one target is accepted; passing
 | `--write-baseline PATH` | Write the current findings' fingerprints to `PATH` as a baseline, print a one-line confirmation, and exit 0 instead of rendering a report or evaluating the gate. |
 | `--config PATH` | Load this configuration file instead of discovering one. |
 | `--jobs N` | Maximum parallel workers (overrides configured `jobs`). Checks currently run sequentially; parallelism arrives in a later phase. |
+| `--context N` | Attach `N` lines of source context around each source-code finding (default: `0` = off). CI/CD and security findings are never shown with context. |
 | `--color {auto,always,never}` | Color output mode (default: `auto`). |
 | `-q, --quiet` | Suppress the human-readable terminal report (other formats still print). |
 | `-v, --verbose` | Increase verbosity; unexpected errors then print a traceback. |
@@ -146,7 +147,7 @@ options = { max_length = 50 }
 - `respect_gitignore` — honor `.gitignore` during discovery (default: `true`).
 - `fail_on` — default gate severity (default: `high`). `baseline` — path to a baseline file; findings whose fingerprint it records are suppressed before the gate is evaluated. A missing configured file is ignored (a missing `--baseline` file is an error).
 - `jobs` — maximum parallel workers; currently accepted but checks run sequentially.
-- `output` — table with `format` (`terminal` | `json` | `sarif` | `markdown`), `color` (`auto` | `always` | `never`), and `output` (`-` or a file path).
+- `output` — table with `format` (`terminal` | `json` | `sarif` | `markdown`), `color` (`auto` | `always` | `never`), `output` (`-` or a file path), and `context` (integer ≥ 0; when > 0, source-code findings include that many surrounding lines, and each finding's excerpt is shown by the terminal/Markdown reporters and under `properties.context` in SARIF).
 - `rules."<check-id>"` — per-check settings keyed by the **check id** (for example `maintainability.function_length`), **not** by the `HT-*` rule id. An `HT-*` key is accepted but is a silent no-op: it neither selects nor configures a check. Each entry supports `enabled` (bool), `severity` (overrides the check's default severity), and `options` (table).
 
 Per-check `options` (defaults in parentheses): `maintainability.function_length` `max_length` (50); `maintainability.nesting_depth` `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false); `maintainability.module_length` `max_lines` (1000); `maintainability.duplication` `min_tokens` (50), `min_occurrences` (2); `maintainability.complexity` `max_cyclomatic` (10); `maintainability.dead_code` `min_confidence` (60), `whitelist` (empty); `typing.annotation_coverage` `min_ratio` (0.8); `documentation.docstring_coverage` `min_ratio` (0.8). `maintainability.import_cycles` has no options.

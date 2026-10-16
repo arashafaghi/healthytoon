@@ -337,3 +337,15 @@ def test_find_config_file_from_file_path(tmp_path: Path, home: Path) -> None:
     target = write(root / "module.py", "x = 1\n")
 
     assert find_config_file(target) == standalone
+
+
+def test_output_context_is_parsed(tmp_path: Path, home: Path) -> None:
+    write(tmp_path / "healthytoon.toml", "[output]\ncontext = 3\n")
+    assert load_config(start=tmp_path).output.context == 3
+
+
+@pytest.mark.parametrize("value", ["-1", "true", '"x"', "1.5"])
+def test_output_context_invalid(tmp_path: Path, home: Path, value: str) -> None:
+    write(tmp_path / "healthytoon.toml", f"[output]\ncontext = {value}\n")
+    with pytest.raises(ConfigError):
+        load_config(start=tmp_path)

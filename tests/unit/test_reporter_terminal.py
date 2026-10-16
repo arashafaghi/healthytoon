@@ -307,3 +307,12 @@ def test_format_id_and_registry() -> None:
     registered = get_reporter("terminal")
     assert isinstance(registered, TerminalReporter)
     assert registered.format_id == "terminal"
+
+
+def test_evidence_is_rendered_indented() -> None:
+    import dataclasses
+
+    finding = dataclasses.replace(_finding(), evidence="  11 | a\n> 12 | b")
+    out = TerminalReporter().render(_report((finding,)))
+    assert "    11 | a" in out
+    assert "    > 12 | b" in out

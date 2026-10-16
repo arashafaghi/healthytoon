@@ -298,3 +298,11 @@ def test_registry_exposes_sarif_reporter() -> None:
     reporter = get_reporter("sarif")
     assert isinstance(reporter, SarifReporter)
     assert reporter.format_id == "sarif"
+
+
+def test_evidence_populates_properties_context() -> None:
+    import dataclasses
+
+    finding = dataclasses.replace(_finding(), evidence="> 12 | boom")
+    result = _render(_report((finding,)))["runs"][0]["results"][0]
+    assert result["properties"]["context"] == "> 12 | boom"

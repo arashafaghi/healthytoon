@@ -27,6 +27,7 @@ from healthytoon.core.context import CheckContext
 from healthytoon.core.policy import exit_code
 from healthytoon.core.protocols import Check, Reporter
 from healthytoon.core.runner import run_checks
+from healthytoon.core.source import attach_context
 from healthytoon.core.types import Report, Severity, ToolInfo
 from healthytoon.errors import EXIT_OK, ConfigError, TargetError, UsageError
 from healthytoon.reporters import available, get_reporter
@@ -111,6 +112,10 @@ _JobsOption = Annotated[
     int | None,
     typer.Option("--jobs", help="maximum parallel workers"),
 ]
+_ContextOption = Annotated[
+    int | None,
+    typer.Option("--context", help="show N lines of source context around each finding"),
+]
 
 
 def run(
@@ -129,6 +134,7 @@ def run(
     quiet: _QuietOption = 0,
     no_progress: _NoProgressOption = False,
     jobs: _JobsOption = None,
+    context: _ContextOption = None,
 ) -> int:
     """Audit the target directory."""
 
@@ -144,6 +150,8 @@ def run(
     # Suppress baselined findings before rendering and before the gate is
     # evaluated, so a fully-baselined repository exits 0.
     report = _apply_baseline(report, explicit=baseline, configured=loaded.baseline)
+    context_lines = context if context is not None else loaded.output.context
+    report = attach_context(report, path, context_lines)
     return _render_and_gate(
         report,
         report_format=format,

@@ -141,6 +141,9 @@ class TerminalReporter:
             lines.append("No findings.")
         else:
             lines.append(_severity_summary(findings))
-            lines.extend(_finding_line(finding, color=color) for finding in findings)
+            for finding in findings:
+                lines.append(_finding_line(finding, color=color))
+                if finding.evidence:
+                    lines.extend(f"    {line}" for line in finding.evidence.splitlines())
         lines.extend(_checks_lines(report.outcomes, color=color))
         return "\n".join(lines) + "\n"

@@ -238,3 +238,12 @@ def test_registry_exposes_markdown_reporter() -> None:
     reporter = get_reporter("markdown")
     assert isinstance(reporter, MarkdownReporter)
     assert reporter.format_id == "markdown"
+
+
+def test_evidence_renders_fenced_code_block() -> None:
+    import dataclasses
+
+    finding = dataclasses.replace(_finding(), evidence="> 12 | boom")
+    out = MarkdownReporter().render(_report((finding,)))
+    assert "```python" in out
+    assert "> 12 | boom" in out

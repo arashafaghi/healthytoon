@@ -471,3 +471,36 @@ def test_help_lists_init_and_explain(capsys: CaptureFixture[str]) -> None:
     output = capsys.readouterr().out
     assert "init" in output
     assert "explain" in output
+
+
+def _make_docstring_target(root: Path) -> Path:
+    package = root / "src"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "a.py").write_text(
+        "def a(x):\n    return x\n\n\ndef b(y):\n    return y\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_context_flag_attaches_source_context(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
+    target = _make_docstring_target(tmp_path)
+
+    main(["check", str(target), "--context", "1", "--format", "json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    documented = [f for f in payload["findings"] if f["category"] == "documentation"]
+    assert documented
+    assert all(finding["evidence"] for finding in documented)
+    assert any(
+        line.startswith(">") for finding in documented for line in finding["evidence"].splitlines()
+    )
+
+
+def test_context_absent_by_default(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
+    target = _make_docstring_target(tmp_path)
+
+    main(["check", str(target), "--format", "json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert all(finding["evidence"] is None for finding in payload["findings"])

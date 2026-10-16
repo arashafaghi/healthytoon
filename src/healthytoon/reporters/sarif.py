@@ -145,4 +145,6 @@ def _result(finding: Finding) -> dict[str, object]:
                 }
             }
         ]
+    if finding.evidence:
+        result["properties"] = {"context": finding.evidence}
     return result

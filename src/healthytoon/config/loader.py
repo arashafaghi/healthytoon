@@ -48,7 +48,7 @@ _TOP_LEVEL_KEYS = frozenset(
         "rules",
     }
 )
-_OUTPUT_KEYS = frozenset({"format", "color", "output"})
+_OUTPUT_KEYS = frozenset({"format", "color", "output", "context"})
 _RULE_KEYS = frozenset({"enabled", "severity", "options"})
 
 
@@ -246,6 +246,13 @@ def _output_layer(value: object, path: Path) -> dict[str, object]:
         if not isinstance(destination, str):
             raise ConfigError(f"{path}: output.output must be a string")
         layer["output"] = destination
+    if "context" in value:
+        context = value["context"]
+        if isinstance(context, bool) or not isinstance(context, int):
+            raise ConfigError(f"{path}: output.context must be an integer")
+        if context < 0:
+            raise ConfigError(f"{path}: output.context must be non-negative")
+        layer["context"] = context
     return layer
 
 
@@ -285,7 +292,7 @@ def _default_data() -> dict[str, object]:
         "fail_on": Severity.HIGH,
         "baseline": None,
         "jobs": 0,
-        "output": {"format": "terminal", "color": "auto", "output": "-"},
+        "output": {"format": "terminal", "color": "auto", "output": "-", "context": 0},
         "rules": {},
     }
 
@@ -356,10 +363,15 @@ def _build_rules(data: dict[str, object]) -> dict[str, RuleConfig]:
 def _build_output(data: dict[str, object]) -> OutputConfig:
     output_raw = data.get("output")
     output_data = output_raw if isinstance(output_raw, dict) else {}
+    context_raw = output_data.get("context", 0)
+    context = (
+        context_raw if isinstance(context_raw, int) and not isinstance(context_raw, bool) else 0
+    )
     return OutputConfig(
         format=str(output_data.get("format", "terminal")),
         color=str(output_data.get("color", "auto")),
         output=str(output_data.get("output", "-")),
+        context=context,
     )
 
 
