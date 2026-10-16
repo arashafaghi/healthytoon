@@ -118,7 +118,7 @@ class Job:
     matrix: Mapping[str, tuple[str, ...]] = field(default_factory=_empty_matrix)
     python_versions: tuple[str, ...] = ()
     triggers: tuple[str, ...] = ()
-    permissions: Mapping[str, object] | None = None
+    permissions: Mapping[str, object] | str | None = None
     env: Mapping[str, object] = field(default_factory=_empty_mapping)
     uses: tuple[ActionRef, ...] = ()
     is_reusable: bool = False
@@ -137,7 +137,7 @@ class PipelineFile:
     platform: str
     jobs: tuple[Job, ...] = ()
     triggers: tuple[str, ...] = ()
-    permissions: Mapping[str, object] | None = None
+    permissions: Mapping[str, object] | str | None = None
     concurrency: str | Mapping[str, object] | None = None
     env: Mapping[str, object] = field(default_factory=_empty_mapping)
     is_reusable: bool = False

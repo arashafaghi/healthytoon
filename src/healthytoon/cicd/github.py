@@ -125,6 +125,14 @@ def _as_mapping_or_none(value: object) -> Mapping[str, object] | None:
     return None
 
 
+def _as_permissions(value: object) -> Mapping[str, object] | str | None:
+    """Normalize ``permissions``, preserving GitHub's scalar ``read-all``/``write-all``."""
+
+    if isinstance(value, str):
+        return value
+    return _as_mapping_or_none(value)
+
+
 def _flatten_matrix(value: object) -> Mapping[str, tuple[str, ...]]:
     """Flatten ``strategy.matrix`` into dimension -> value tuple.
 
@@ -272,7 +280,7 @@ def _parse_job(job_id: str, raw: object, file: str, triggers: tuple[str, ...]) -
         matrix=matrix,
         python_versions=_python_versions_from(matrix, steps),
         triggers=triggers,
-        permissions=_as_mapping_or_none(raw.get("permissions")),
+        permissions=_as_permissions(raw.get("permissions")),
         env=_as_mapping(raw.get("env")),
         uses=uses,
         is_reusable=bool(uses),
@@ -313,7 +321,7 @@ def parse_github_workflow(doc: RawDocument, root: Path) -> PipelineFile:
         platform=PLATFORM,
         jobs=tuple(jobs),
         triggers=triggers,
-        permissions=_as_mapping_or_none(data.get("permissions")),
+        permissions=_as_permissions(data.get("permissions")),
         concurrency=_concurrency(data.get("concurrency")),
         env=_as_mapping(data.get("env")),
         is_reusable="workflow_call" in triggers,

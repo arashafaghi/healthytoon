@@ -65,7 +65,8 @@ def _patch_entry_points(monkeypatch: pytest.MonkeyPatch, points: object) -> None
     monkeypatch.setattr(importlib.metadata, "entry_points", fake_entry_points)
 
 
-#: Stable registration order of the checks bundled with Healthytoon (T2a.1a/T2a.1b).
+#: Stable registration order of the checks bundled with Healthytoon
+#: (T2a.1a/T2a.1b maintainability, then T2b.3/T2b.4 CI/CD).
 _BUILTIN_IDS: tuple[str, ...] = (
     "maintainability.function_length",
     "maintainability.nesting_depth",
@@ -76,6 +77,19 @@ _BUILTIN_IDS: tuple[str, ...] = (
     "maintainability.duplication",
     "maintainability.complexity",
     "maintainability.dead_code",
+    "ci.workflow_present",
+    "ci.workflow_parse",
+    "ci.tests_present",
+    "ci.actions_pinned",
+    "ci.permissions_explicit",
+    "ci.secrets",
+    "ci.python_eol",
+    "ci.python_matrix",
+    "ci.python_consistency",
+    "ci.coverage_gate",
+    "ci.lockfile",
+    "ci.dependency_updates",
+    "ci.triggers_pull_request",
 )
 
 

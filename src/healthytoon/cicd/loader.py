@@ -12,6 +12,7 @@ captured as :class:`RawTag` sentinels rather than raising.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,11 +20,24 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import MappingNode, ScalarNode, SequenceNode
+from ruamel.yaml.resolver import VersionedResolver
 
 __all__ = ["DEFAULT_MAX_BYTES", "RawDocument", "RawTag", "load_yaml"]
 
 #: Default maximum file size: 5 MiB of source, enough for any sane CI file.
 DEFAULT_MAX_BYTES = 5_242_880
+
+#: Tag that resolves a scalar to a plain string.
+_STRING_TAG = "tag:yaml.org,2002:str"
+
+#: A dotted numeric scalar such as ``3.10`` or ``3.12.1``. YAML resolves these
+#: as floats, which silently turns a Python version into ``3.1``; CI files use
+#: them as opaque version labels, so they must stay strings.
+_VERSION_RE = re.compile(r"^[-+]?[0-9][0-9_]*\.[0-9]+(?:\.[0-9]+)*$")
+
+#: Characters a version scalar may start with; the resolver is keyed by first
+#: character, so these buckets must be patched to win before the float rules.
+_VERSION_FIRST_CHARS = "0123456789-+"
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,24 @@ def _construct_raw_tag(constructor: Any, tag_suffix: str, node: Any) -> RawTag:
     return RawTag(tag=str(node.tag), value=value)
 
 
+def _preserve_version_strings(yaml: YAML) -> None:
+    """Resolve dotted numeric scalars as strings instead of floats.
+
+    YAML's core schema treats ``3.10`` as the float ``3.1``, which corrupts
+    version labels such as ``python-version``. A string resolver is prepended to
+    the numeric first-character buckets so it matches before the built-in float
+    rule; every other scalar (booleans, null, integers, quoted text) is left to
+    the standard resolvers.
+    """
+
+    resolver = yaml.resolver
+    if not isinstance(resolver, VersionedResolver):  # pragma: no cover - safe loader always is
+        return
+    versioned = resolver.versioned_resolver
+    for first in _VERSION_FIRST_CHARS:
+        versioned.setdefault(first, []).insert(0, (_STRING_TAG, _VERSION_RE))
+
+
 def _make_yaml() -> YAML:
     """Return a safe YAML loader configured for tolerant CI parsing."""
 
@@ -78,6 +110,7 @@ def _make_yaml() -> YAML:
     # of raising a ConstructorError. Exact-tag constructors still win, so
     # standard scalars/sequences/mappings are unaffected.
     yaml.constructor.add_multi_constructor("", _construct_raw_tag)
+    _preserve_version_strings(yaml)
     return yaml
 
 

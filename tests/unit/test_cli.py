@@ -35,6 +35,47 @@ def _make_clean_target(root: Path) -> Path:
         '    """Return ``value`` plus one."""\n    return value + 1\n',
         encoding="utf-8",
     )
+    # The CI/CD checks are always-on, so a fixture that satisfies *every*
+    # built-in needs a healthy CI configuration too.
+    sha = "a" * 40
+    workflow = root / ".github" / "workflows" / "ci.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(
+        "name: CI\n"
+        "on:\n"
+        "  push:\n"
+        "  pull_request:\n"
+        "permissions:\n"
+        "  contents: read\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        '        python-version: ["3.12", "3.13"]\n'
+        "    steps:\n"
+        f"      - uses: actions/checkout@{sha}\n"
+        f"      - uses: actions/setup-python@{sha}\n"
+        "        with:\n"
+        "          python-version: ${{ matrix.python-version }}\n"
+        "      - run: pytest -q\n"
+        "  install:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        f"      - uses: actions/checkout@{sha}\n"
+        "      - run: uv sync --frozen\n",
+        encoding="utf-8",
+    )
+    (root / ".github" / "dependabot.yml").write_text(
+        "version: 2\n"
+        "updates:\n"
+        '  - package-ecosystem: "github-actions"\n'
+        '    directory: "/"\n'
+        "    schedule:\n"
+        '      interval: "weekly"\n',
+        encoding="utf-8",
+    )
+    (root / "uv.lock").write_text("", encoding="utf-8")
     return root
 
 
@@ -151,7 +192,8 @@ def test_list_prints_builtin_check_ids(capsys: CaptureFixture[str]) -> None:
 def test_check_scans_files(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
     target = _make_target(tmp_path)
 
-    assert main(["check", str(target), "--format", "json"]) == 0
+    # The fixture has no CI configuration, so skip the CI/CD checks.
+    assert main(["check", str(target), "--format", "json", "--skip", "ci.*"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["target"]["files_scanned"] == 1
 
@@ -188,7 +230,7 @@ def test_unknown_flag_exits_two() -> None:
 def test_check_json_format(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
     target = _make_target(tmp_path)
 
-    assert main(["check", str(target), "--format", "json"]) == 0
+    assert main(["check", str(target), "--format", "json", "--skip", "ci.*"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert "target" in payload
     assert "summary" in payload
@@ -197,7 +239,7 @@ def test_check_json_format(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
 def test_check_sarif_format(tmp_path: Path, capsys: CaptureFixture[str]) -> None:
     target = _make_target(tmp_path)
 
-    assert main(["check", str(target), "--format", "sarif"]) == 0
+    assert main(["check", str(target), "--format", "sarif", "--skip", "ci.*"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["version"] == "2.1.0"
 
@@ -225,7 +267,7 @@ def test_check_output_file(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     destination = tmp_path / "report.txt"
 
-    assert main(["check", str(target), "-o", str(destination)]) == 0
+    assert main(["check", str(target), "-o", str(destination), "--skip", "ci.*"]) == 0
     assert destination.read_text(encoding="utf-8")
 
 
@@ -265,13 +307,16 @@ def test_check_exclude_appends_to_default_excludes(
     (target / "extra" / "other.py").write_text("z = 3\n", encoding="utf-8")
 
     # Default excludes prune .venv; src/keep.py and extra/other.py remain.
-    assert main(["check", str(target), "--format", "json"]) == 0
+    assert main(["check", str(target), "--format", "json", "--skip", "ci.*"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["target"]["files_scanned"] == 2
 
     # --exclude appends to the defaults: extra/ is pruned, but .venv must stay
     # excluded (so the count drops to 1: only src/keep.py survives).
-    assert main(["check", str(target), "--format", "json", "--exclude", "extra"]) == 0
+    assert (
+        main(["check", str(target), "--format", "json", "--exclude", "extra", "--skip", "ci.*"])
+        == 0
+    )
     payload = json.loads(capsys.readouterr().out)
     assert payload["target"]["files_scanned"] == 1
 

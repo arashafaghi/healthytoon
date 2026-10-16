@@ -195,6 +195,59 @@ def test_python_versions_fall_back_to_setup_python(tmp_path: Path) -> None:
     assert pipeline.jobs[0].python_versions == ("3.13",)
 
 
+def test_scalar_permissions_are_preserved(tmp_path: Path) -> None:
+    text = (
+        "on: push\n"
+        "permissions: read-all\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    permissions: write-all\n"
+        "    steps: []\n"
+    )
+
+    pipeline = _parse(tmp_path, text)
+
+    assert pipeline.permissions == "read-all"
+    assert pipeline.jobs[0].permissions == "write-all"
+
+
+def test_mapping_permissions_stay_mappings(tmp_path: Path) -> None:
+    text = (
+        "on: push\n"
+        "permissions:\n"
+        "  contents: read\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps: []\n"
+    )
+
+    pipeline = _parse(tmp_path, text)
+
+    assert dict(pipeline.permissions or {}) == {"contents": "read"}
+
+
+def test_unquoted_python_version_is_preserved(tmp_path: Path) -> None:
+    text = (
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        python-version: [3.10, 3.12]\n"
+        "    steps:\n"
+        "      - uses: actions/setup-python@v5\n"
+        "        with:\n"
+        "          python-version: 3.10\n"
+    )
+
+    pipeline = _parse(tmp_path, text)
+
+    assert pipeline.jobs[0].python_versions == ("3.10", "3.12")
+
+
 def test_parse_error_is_propagated(tmp_path: Path) -> None:
     doc = RawDocument(path=str(tmp_path / "x.yml"), data=None, raw_text="", error="boom")
 

@@ -33,9 +33,13 @@ def _write(repo: Path, name: str, source: str) -> None:
 def _run_check_json(
     repo: Path, capsys: CaptureFixture[str], *extra: str
 ) -> tuple[int, dict[str, Any]]:
-    """Run ``healthytoon check`` in-process and return (exit code, JSON payload)."""
+    """Run ``healthytoon check`` in-process and return (exit code, JSON payload).
 
-    code = main(["check", str(repo), "--format", "json", *extra])
+    These fixtures carry no CI configuration, so the CI/CD checks are skipped:
+    the scenarios below isolate the maintainability-cycle and duplication rules.
+    """
+
+    code = main(["check", str(repo), "--format", "json", "--skip", "ci.*", *extra])
     payload = json.loads(capsys.readouterr().out)
     return code, payload
 
@@ -147,9 +151,9 @@ def test_cycle_scan_is_byte_identical_across_runs(
 ) -> None:
     _write_cyclic_package(tmp_path)
 
-    assert main(["check", str(tmp_path), "--format", "json"]) == 0
+    assert main(["check", str(tmp_path), "--format", "json", "--skip", "ci.*"]) == 0
     first = capsys.readouterr().out
-    assert main(["check", str(tmp_path), "--format", "json"]) == 0
+    assert main(["check", str(tmp_path), "--format", "json", "--skip", "ci.*"]) == 0
     second = capsys.readouterr().out
 
     assert first == second

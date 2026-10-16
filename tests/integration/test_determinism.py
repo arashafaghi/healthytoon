@@ -34,8 +34,20 @@ def _run_check(repo: Path, hash_seed: str) -> subprocess.CompletedProcess[bytes]
 
     env = os.environ.copy()
     env["PYTHONHASHSEED"] = hash_seed
+    # These fixtures have no CI configuration; skip the CI/CD checks so this
+    # test keeps isolating JSON determinism for the maintainability engine.
     return subprocess.run(
-        [sys.executable, "-m", "healthytoon", "check", str(repo), "--format", "json"],
+        [
+            sys.executable,
+            "-m",
+            "healthytoon",
+            "check",
+            str(repo),
+            "--format",
+            "json",
+            "--skip",
+            "ci.*",
+        ],
         capture_output=True,
         env=env,
         check=False,

@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pytest import CaptureFixture
+from pytest import CaptureFixture, fixture
 
 from healthytoon.cli.app import main
 
@@ -29,7 +29,79 @@ BUILTIN_CHECK_IDS: tuple[str, ...] = (
     "maintainability.duplication",
     "maintainability.complexity",
     "maintainability.dead_code",
+    "ci.workflow_present",
+    "ci.workflow_parse",
+    "ci.tests_present",
+    "ci.actions_pinned",
+    "ci.permissions_explicit",
+    "ci.secrets",
+    "ci.python_eol",
+    "ci.python_matrix",
+    "ci.python_consistency",
+    "ci.coverage_gate",
+    "ci.lockfile",
+    "ci.dependency_updates",
+    "ci.triggers_pull_request",
 )
+
+_SHA = "a" * 40
+
+#: A CI scaffold that satisfies every CI/CD check, so these maintainability
+#: scenarios observe only the maintainability findings they are written for.
+_HEALTHY_WORKFLOW = f"""\
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@{_SHA}
+      - uses: actions/setup-python@{_SHA}
+        with:
+          python-version: ${{{{ matrix.python-version }}}}
+      - run: pytest -q
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@{_SHA}
+      - run: uv sync --frozen
+"""
+
+_HEALTHY_DEPENDABOT = """\
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+"""
+
+
+def _write_healthy_ci(repo: Path) -> None:
+    """Write a CI scaffold that passes every CI/CD check."""
+
+    workflow = repo / ".github" / "workflows" / "ci.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text(_HEALTHY_WORKFLOW, encoding="utf-8")
+    (repo / ".github" / "dependabot.yml").write_text(_HEALTHY_DEPENDABOT, encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nrequires-python = ">=3.12"\n', encoding="utf-8"
+    )
+    (repo / "uv.lock").write_text("", encoding="utf-8")
+
+
+@fixture(autouse=True)
+def _ci_scaffold(tmp_path: Path) -> None:
+    """Give every scenario a healthy CI configuration by default."""
+
+    _write_healthy_ci(tmp_path)
 
 
 def _write_py(repo: Path, name: str, source: str) -> None:
