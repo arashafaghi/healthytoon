@@ -25,7 +25,9 @@ import typer
 
 from healthytoon import __version__
 from healthytoon.cli.commands import check as check_command
+from healthytoon.cli.commands import explain as explain_command
 from healthytoon.cli.commands import get_verbose_level
+from healthytoon.cli.commands import init as init_command
 from healthytoon.cli.commands import list as list_command
 from healthytoon.cli.commands import version as version_command
 from healthytoon.errors import EXIT_INTERNAL, EXIT_USAGE, HealthytoonError
@@ -86,6 +88,8 @@ def _root(
 
 
 app.command("check")(check_command.run)
+app.command("init")(init_command.run)
+app.command("explain")(explain_command.run)
 app.command("list")(list_command.run)
 app.command("version")(version_command.run)
 

@@ -21,13 +21,14 @@ from healthytoon import __version__
 from healthytoon.cli.commands import set_verbose_level
 from healthytoon.config.loader import load_config
 from healthytoon.config.models import Config
+from healthytoon.core import baseline as baseline_support
 from healthytoon.core import registry
 from healthytoon.core.context import CheckContext
 from healthytoon.core.policy import exit_code
 from healthytoon.core.protocols import Check
 from healthytoon.core.runner import run_checks
-from healthytoon.core.types import Severity, ToolInfo
-from healthytoon.errors import TargetError, UsageError
+from healthytoon.core.types import Report, Severity, ToolInfo
+from healthytoon.errors import EXIT_OK, ConfigError, TargetError, UsageError
 from healthytoon.reporters import available, get_reporter
 
 __all__ = ["run"]
@@ -74,6 +75,17 @@ def run(
     exclude: Annotated[
         list[str] | None,
         typer.Option("--exclude", help="exclude a path glob (repeatable)"),
+    ] = None,
+    baseline: Annotated[
+        Path | None,
+        typer.Option("--baseline", help="suppress findings recorded in this baseline file"),
+    ] = None,
+    write_baseline: Annotated[
+        Path | None,
+        typer.Option(
+            "--write-baseline",
+            help="write the current findings to PATH as a baseline and exit",
+        ),
     ] = None,
     color: Annotated[
         str | None,
@@ -129,6 +141,16 @@ def run(
         jobs=loaded.jobs,
     )
 
+    if write_baseline is not None:
+        baseline_support.write_baseline(write_baseline, report)
+        recorded = sum(1 for finding in report.findings if finding.fingerprint)
+        typer.echo(f"Wrote {recorded} fingerprint(s) to {write_baseline}")
+        return EXIT_OK
+
+    # Suppress baselined findings before rendering and before the gate is
+    # evaluated, so a fully-baselined repository exits 0.
+    report = _apply_baseline(report, explicit=baseline, configured=loaded.baseline)
+
     fmt = format or loaded.output.format
     try:
         reporter = get_reporter(fmt)
@@ -168,6 +190,28 @@ def _select_checks(
             if not any(fnmatch.fnmatchcase(check_id, pattern) for pattern in skip)
         }
     return tuple(selected[check_id] for check_id in sorted(selected))
+
+
+def _apply_baseline(report: Report, *, explicit: Path | None, configured: str | None) -> Report:
+    """Apply the effective baseline, if any, to ``report``.
+
+    ``--baseline`` takes precedence over ``config.baseline``. A missing
+    explicitly-requested file is an error; a missing configured file is a
+    no-op so a stale configuration cannot break every run.
+    """
+
+    if explicit is not None:
+        source = explicit
+    elif configured:
+        source = Path(configured)
+    else:
+        return report
+
+    if source.exists():
+        return baseline_support.apply_baseline(report, baseline_support.load_baseline(source))
+    if explicit is not None:
+        raise ConfigError(f"{source}: baseline file not found")
+    return report
 
 
 def _resolve_color(mode: str, *, destination: str) -> bool:
