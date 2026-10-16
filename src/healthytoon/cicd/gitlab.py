@@ -30,6 +30,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 
+from healthytoon.cicd._shared import (
+    _as_mapping,
+    _as_str_tuple,
+    _escape_pointer,
+    _mapping_document,
+    _opt_str,
+    _pipeline_root,
+    _scalar_str,
+)
 from healthytoon.cicd.ir import ActionRef, Job, PipelineFile, Step
 from healthytoon.cicd.loader import RawDocument, RawTag
 from healthytoon.core.types import Location
@@ -69,57 +78,6 @@ _SOURCE_TOKENS = (
 
 #: GitLab raw-file URLs embed the ref as ``/-/raw/<ref>/...``.
 _REMOTE_REF_RE = re.compile(r"/-/raw/([^/]+)/")
-
-
-def _relative_posix(path: Path, root: Path) -> str:
-    """Return ``path`` relative to ``root`` as a POSIX path, best effort."""
-
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _escape_pointer(token: str) -> str:
-    """Escape one JSON-pointer reference token (RFC 6901)."""
-
-    return token.replace("~", "~0").replace("/", "~1")
-
-
-def _scalar_str(value: object) -> str | None:
-    """Render a YAML scalar as text; ``None`` for composite or null values."""
-
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    return None
-
-
-def _opt_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _as_str_tuple(value: object) -> tuple[str, ...]:
-    """Normalize a scalar or sequence into a tuple of strings."""
-
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        rendered = (_scalar_str(item) for item in value)
-        return tuple(item for item in rendered if item is not None)
-    single = _scalar_str(value)
-    return (single,) if single is not None else ()
-
-
-def _as_mapping(value: object) -> Mapping[str, object]:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): item for key, item in value.items()})
-    return MappingProxyType({})
 
 
 def _dedupe(names: Iterable[str]) -> tuple[str, ...]:
@@ -272,19 +230,10 @@ def parse_gitlab_ci(doc: RawDocument, root: Path) -> PipelineFile:
     are empty.
     """
 
-    path = _relative_posix(Path(doc.path), root)
-    if doc.error is not None:
-        return PipelineFile(
-            path=path, platform=PLATFORM, parse_error=doc.error, raw_text=doc.raw_text
-        )
-    data = doc.data
-    if not isinstance(data, Mapping):
-        return PipelineFile(
-            path=path,
-            platform=PLATFORM,
-            parse_error=".gitlab-ci.yml root is not a mapping",
-            raw_text=doc.raw_text,
-        )
+    loaded = _pipeline_root(doc, root, PLATFORM, ".gitlab-ci.yml root is not a mapping")
+    if isinstance(loaded, PipelineFile):
+        return loaded
+    path, data = loaded
 
     file_triggers = _workflow_triggers(data.get("workflow"))
     default_before_script = tuple(_flatten_commands(data.get("before_script")))
@@ -403,11 +352,12 @@ def gitlab_pinning_targets(doc: RawDocument, root: Path) -> tuple[ActionRef, ...
     load or is not a mapping.
     """
 
-    if doc.error is not None or not isinstance(doc.data, Mapping):
+    loaded = _mapping_document(doc, root)
+    if loaded is None:
         return ()
-    file = _relative_posix(Path(doc.path), root)
+    file, data = loaded
     targets: list[ActionRef] = []
-    for entry in _include_entries(doc.data.get("include")):
+    for entry in _include_entries(data.get("include")):
         ref = _include_ref(entry, file)
         if ref is not None:
             targets.append(ref)

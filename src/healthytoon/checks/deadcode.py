@@ -7,6 +7,10 @@ turns each non-whitelisted hit into a finding. A small built-in whitelist
 suppresses names that are legitimately "unused" by Python's own rules but
 meaningful to frameworks: pytest tests and fixtures, ``visit_*`` AST visitor
 methods, ``main`` entry points, and names exported through ``__all__``.
+Structural suppression additionally drops members of ``typing.Protocol``
+subclasses and ``@dataclass`` classes, functions/classes decorated as nox
+sessions, and ``nox.options`` configuration attributes, because those are
+consumed reflectively rather than named in source.
 
 When ``vulture`` is not on ``PATH`` (or cannot be launched) the check reports
 ``SKIP`` with an explanatory note rather than failing the audit.
@@ -45,6 +49,17 @@ _MAX_FINDINGS = 200
 _FRAMEWORK_NAME_PREFIXES: tuple[str, ...] = ("test_", "pytest_", "visit_")
 #: Exact names treated as framework entry points rather than dead code.
 _FRAMEWORK_NAMES: frozenset[str] = frozenset({"main"})
+
+#: Decorator marking a dataclass; matched by terminal name
+#: (``@dataclass`` and ``@dataclasses.dataclass``).
+_DATACLASS_DECORATOR = "dataclass"
+#: Base class marking a ``typing.Protocol``; matched by terminal name.
+_PROTOCOL_BASE = "Protocol"
+#: Decorator marking a nox session (``@nox.session`` or ``@session``).
+_NOX_SESSION_DECORATOR = "session"
+#: Root object and attribute whose assignments configure nox (``nox.options``).
+_NOX_OPTIONS_OWNER = "nox"
+_NOX_OPTIONS_ATTRIBUTE = "options"
 
 #: Notes surfaced when the backend is unavailable; tests assert on this text.
 _VULTURE_MISSING_NOTE = "vulture is not installed; dead-code analysis skipped"
@@ -241,11 +256,18 @@ def _parse_output(stdout: str) -> list[_VultureIssue]:
     return issues
 
 
-def _decorator_name(node: ast.expr) -> str | None:
-    """Return the terminal name of a decorator expression (``pytest.fixture`` -> ``fixture``)."""
+def _reference_name(node: ast.expr) -> str | None:
+    """Return the terminal name of a decorator or base-class expression.
+
+    Calls, subscriptions, and attribute access resolve to the final identifier,
+    so ``@pytest.fixture``, ``Protocol[T]``, and ``nox.session`` become
+    ``fixture``, ``Protocol``, and ``session`` respectively.
+    """
 
     if isinstance(node, ast.Call):
-        return _decorator_name(node.func)
+        return _reference_name(node.func)
+    if isinstance(node, ast.Subscript):
+        return _reference_name(node.value)
     if isinstance(node, ast.Attribute):
         return node.attr
     if isinstance(node, ast.Name):
@@ -256,7 +278,62 @@ def _decorator_name(node: ast.expr) -> str | None:
 def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True when ``node`` looks like a pytest fixture (``@fixture``/``@pytest.fixture``)."""
 
-    return any(_decorator_name(decorator) == "fixture" for decorator in node.decorator_list)
+    return any(_reference_name(decorator) == "fixture" for decorator in node.decorator_list)
+
+
+def _is_nox_session(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when ``node`` carries a nox session decorator (``@nox.session``/``@session``)."""
+
+    return any(
+        _reference_name(decorator) == _NOX_SESSION_DECORATOR for decorator in node.decorator_list
+    )
+
+
+def _is_protocol_subclass(node: ast.ClassDef) -> bool:
+    """True when ``node`` directly subclasses ``typing.Protocol``."""
+
+    return any(_reference_name(base) == _PROTOCOL_BASE for base in node.bases)
+
+
+def _is_dataclass(node: ast.ClassDef) -> bool:
+    """True when ``node`` is decorated with ``@dataclass`` or ``@dataclasses.dataclass``."""
+
+    return any(
+        _reference_name(decorator) == _DATACLASS_DECORATOR for decorator in node.decorator_list
+    )
+
+
+def _class_member_names(node: ast.ClassDef) -> set[str]:
+    """Return the attribute, property, and method names declared on ``node``."""
+
+    names: set[str] = set()
+    for statement in node.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            names.add(statement.name)
+        elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+            names.add(statement.target.id)
+        elif isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    return names
+
+
+def _nox_option_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
+    """Return the ``nox.options.<name>`` attribute names assigned by ``node``."""
+
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    names: set[str] = set()
+    for target in targets:
+        if not isinstance(target, ast.Attribute):
+            continue
+        owner = target.value
+        if not isinstance(owner, ast.Attribute) or owner.attr != _NOX_OPTIONS_ATTRIBUTE:
+            continue
+        root = owner.value
+        if isinstance(root, ast.Name) and root.id == _NOX_OPTIONS_OWNER:
+            names.add(target.attr)
+    return names
 
 
 def _string_elements(value: ast.expr) -> set[str]:
@@ -300,6 +377,16 @@ def _framework_whitelist(modules: Sequence[ast.Module], extra: Sequence[str]) ->
         for node in ast.walk(module):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_fixture(node):
                 names.add(node.name)
+            if isinstance(
+                node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            ) and _is_nox_session(node):
+                names.add(node.name)
+            if isinstance(node, ast.ClassDef) and (
+                _is_protocol_subclass(node) or _is_dataclass(node)
+            ):
+                names.update(_class_member_names(node))
+            if isinstance(node, ast.Assign | ast.AnnAssign):
+                names.update(_nox_option_names(node))
     return names
 
 

@@ -1,7 +1,7 @@
 ---
 description: Performs independent, read-only reviews of Healthytoon code
 mode: subagent
-model: opencode/mimo-v2.6-flash-free
+model: openrouter/deepseek/deepseek-v4.1-flash
 ---
 
 You are the independent code reviewer for Healthytoon.

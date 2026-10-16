@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
-from pathlib import Path
 
-from healthytoon.core.context import CheckContext
-from healthytoon.core.protocols import CHECK_API_VERSION, CheckResult
-from healthytoon.core.types import (
-    Category,
-    FileKind,
-    Finding,
-    Location,
-    Remediation,
-    Severity,
-    Status,
+from healthytoon.checks._shared import (
+    _parsed_modules,
+    _ratio_option,
+    _RatioCoverageCheck,
+    _relative_posix,
+    _result,
 )
+from healthytoon.core.context import CheckContext
+from healthytoon.core.protocols import CheckResult
+from healthytoon.core.types import Category, Finding, Location, Remediation
 
 __all__ = ["AnnotationCoverageCheck"]
 
@@ -25,42 +22,6 @@ _DEFAULT_MIN_RATIO = 0.8
 
 #: Parameter names exempt from annotation because the type is implied.
 _IMPLICIT_SELF_NAMES = frozenset({"self", "cls"})
-
-
-def _relative_posix(path: Path, root: Path) -> str:
-    """Return ``path`` relative to ``root`` as a POSIX path.
-
-    Falls back to the path itself when it cannot be expressed relative to
-    ``root`` (for example in hand-built test contexts).
-    """
-
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _float_option(options: Mapping[str, object], key: str, default: float) -> float:
-    """Read numeric option ``key``; fall back to ``default`` when unusable."""
-
-    value = options.get(key, default)
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return default
-    return default
-
-
-def _result(check_id: str, findings: list[Finding]) -> CheckResult:
-    """Wrap ``findings`` in a :class:`CheckResult` (WARN when anything fired)."""
-
-    status = Status.WARN if findings else Status.PASS
-    return CheckResult(check=check_id, findings=tuple(findings), status=status)
 
 
 def _public_functions(module: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -93,32 +54,19 @@ def _is_annotated(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return all(parameter.annotation is not None for parameter in parameters)
 
 
-class AnnotationCoverageCheck:
+class AnnotationCoverageCheck(_RatioCoverageCheck):
     """Flag modules where too few public functions have fully annotated signatures."""
 
     id: str = "typing.annotation_coverage"
     rule_id: str = "HT-TYPE-001"
     category: Category = Category.TYPING
-    default_severity: Severity = Severity.LOW
-    api_version: int = CHECK_API_VERSION
-    cross_file: bool = False
-    file_kinds: frozenset[FileKind] = frozenset({FileKind.PYTHON})
-
-    def supports(self, ctx: CheckContext) -> bool:
-        """Run whenever the context contains at least one Python file."""
-
-        return bool(ctx.files_for(self.file_kinds))
 
     def run(self, ctx: CheckContext) -> CheckResult:
         """Emit one finding per module below the ``min_ratio`` annotation share."""
 
-        options = ctx.rule_options(self.id, {"min_ratio": _DEFAULT_MIN_RATIO})
-        min_ratio = _float_option(options, "min_ratio", _DEFAULT_MIN_RATIO)
+        min_ratio = _ratio_option(ctx, self.id, _DEFAULT_MIN_RATIO)
         findings: list[Finding] = []
-        for path in sorted(ctx.files_for(self.file_kinds)):
-            module = ctx.parse_ast(path)
-            if module is None:
-                continue
+        for path, module in _parsed_modules(ctx, self.file_kinds):
             public = _public_functions(module)
             if not public:
                 continue

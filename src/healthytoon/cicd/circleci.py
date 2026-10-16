@@ -25,8 +25,15 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import MappingProxyType
 
+from healthytoon.cicd._shared import (
+    _as_mapping,
+    _escape_pointer,
+    _mapping_document,
+    _opt_str,
+    _pipeline_root,
+    _scalar_str,
+)
 from healthytoon.cicd.ir import ActionRef, Job, PipelineFile, Step
 from healthytoon.cicd.loader import RawDocument
 from healthytoon.core.types import Location
@@ -46,45 +53,6 @@ _ORB_RE = re.compile(r"^(?P<owner>[^/@\s]+)/(?P<orb>[^@\s]+)@(?P<ref>\S+)$")
 
 #: An exact ``major.minor.patch`` release is treated as an immutable orb ref.
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-
-
-def _relative_posix(path: Path, root: Path) -> str:
-    """Return ``path`` relative to ``root`` as a POSIX path, best effort."""
-
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _escape_pointer(token: str) -> str:
-    """Escape one JSON-pointer reference token (RFC 6901)."""
-
-    return token.replace("~", "~0").replace("/", "~1")
-
-
-def _scalar_str(value: object) -> str | None:
-    """Render a YAML scalar as text; ``None`` for composite or null values."""
-
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    return None
-
-
-def _opt_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _as_mapping(value: object) -> Mapping[str, object]:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): item for key, item in value.items()})
-    return MappingProxyType({})
 
 
 def _as_sequence(value: object) -> list[object]:
@@ -188,19 +156,10 @@ def parse_circleci_config(doc: RawDocument, root: Path) -> PipelineFile:
     are empty.
     """
 
-    path = _relative_posix(Path(doc.path), root)
-    if doc.error is not None:
-        return PipelineFile(
-            path=path, platform=PLATFORM, parse_error=doc.error, raw_text=doc.raw_text
-        )
-    data = doc.data
-    if not isinstance(data, Mapping):
-        return PipelineFile(
-            path=path,
-            platform=PLATFORM,
-            parse_error="CircleCI config root is not a mapping",
-            raw_text=doc.raw_text,
-        )
+    loaded = _pipeline_root(doc, root, PLATFORM, "CircleCI config root is not a mapping")
+    if isinstance(loaded, PipelineFile):
+        return loaded
+    path, data = loaded
 
     jobs_by_id: dict[str, Job] = {}
     jobs_raw = data.get("jobs")
@@ -256,10 +215,11 @@ def _collect_orbs(value: object) -> list[ActionRef]:
 def circleci_orb_targets(doc: RawDocument, root: Path) -> tuple[ActionRef, ...]:
     """Return the external orbs referenced by the config as pinning targets."""
 
-    if doc.error is not None or not isinstance(doc.data, Mapping):
+    loaded = _mapping_document(doc, root)
+    if loaded is None:
         return ()
-    file = _relative_posix(Path(doc.path), root)
-    refs = _collect_orbs(doc.data.get("orbs"))
+    file, data = loaded
+    refs = _collect_orbs(data.get("orbs"))
     return tuple(
         ActionRef(
             raw=ref.raw,

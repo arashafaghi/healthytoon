@@ -1,7 +1,7 @@
 ---
 description: Designs behavior and integration tests for Healthytoon
 mode: subagent
-model: opencode/mimo-v2.6-flash-free
+model: openrouter/deepseek/deepseek-v4.1-flash
 ---
 
 You are the test engineering specialist for Healthytoon.

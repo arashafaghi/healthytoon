@@ -242,18 +242,24 @@ def _output_layer(value: object, path: Path) -> dict[str, object]:
     if "color" in value:
         layer["color"] = _output_choice(value["color"], "color", _OUTPUT_COLORS, path)
     if "output" in value:
-        destination = value["output"]
-        if not isinstance(destination, str):
-            raise ConfigError(f"{path}: output.output must be a string")
-        layer["output"] = destination
+        layer["output"] = _output_destination(value["output"], path)
     if "context" in value:
-        context = value["context"]
-        if isinstance(context, bool) or not isinstance(context, int):
-            raise ConfigError(f"{path}: output.context must be an integer")
-        if context < 0:
-            raise ConfigError(f"{path}: output.context must be non-negative")
-        layer["context"] = context
+        layer["context"] = _output_context(value["context"], path)
     return layer
+
+
+def _output_destination(value: object, path: Path) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"{path}: output.output must be a string")
+    return value
+
+
+def _output_context(value: object, path: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"{path}: output.context must be an integer")
+    if value < 0:
+        raise ConfigError(f"{path}: output.context must be non-negative")
+    return value
 
 
 def _rules_layer(value: object, path: Path) -> dict[str, dict[str, object]]:

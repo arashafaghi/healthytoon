@@ -21,6 +21,14 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
+from healthytoon.cicd._shared import (
+    _as_mapping,
+    _as_str_tuple,
+    _escape_pointer,
+    _opt_str,
+    _pipeline_root,
+    _relative_posix,
+)
 from healthytoon.cicd.circleci import parse_circleci_config
 from healthytoon.cicd.gitlab import parse_gitlab_ci
 from healthytoon.cicd.ir import ActionRef, CIArtifacts, Job, PipelineFile, Step
@@ -65,61 +73,10 @@ _ARTIFACT_EXCLUDES: tuple[str, ...] = (
 _URL_RE = re.compile(r"^\s*url\s*=\s*(\S+)\s*$", re.MULTILINE)
 
 
-def _relative_posix(path: Path, root: Path) -> str:
-    """Return ``path`` relative to ``root`` as a POSIX path, best effort."""
-
-    try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
-def _escape_pointer(token: str) -> str:
-    """Escape one JSON-pointer reference token (RFC 6901)."""
-
-    return token.replace("~", "~0").replace("/", "~1")
-
-
-def _opt_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
 def _opt_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     return value if isinstance(value, int) else None
-
-
-def _scalar_str(value: object) -> str | None:
-    """Render a YAML scalar as text; ``None`` for composite or null values."""
-
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    return None
-
-
-def _as_str_tuple(value: object) -> tuple[str, ...]:
-    """Normalize a scalar or sequence into a tuple of strings."""
-
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        rendered = (_scalar_str(item) for item in value)
-        return tuple(item for item in rendered if item is not None)
-    single = _scalar_str(value)
-    return (single,) if single is not None else ()
-
-
-def _as_mapping(value: object) -> Mapping[str, object]:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): item for key, item in value.items()})
-    return MappingProxyType({})
 
 
 def _as_mapping_or_none(value: object) -> Mapping[str, object] | None:
@@ -299,19 +256,10 @@ def parse_github_workflow(doc: RawDocument, root: Path) -> PipelineFile:
     are empty.
     """
 
-    path = _relative_posix(Path(doc.path), root)
-    if doc.error is not None:
-        return PipelineFile(
-            path=path, platform=PLATFORM, parse_error=doc.error, raw_text=doc.raw_text
-        )
-    data = doc.data
-    if not isinstance(data, Mapping):
-        return PipelineFile(
-            path=path,
-            platform=PLATFORM,
-            parse_error="workflow root is not a mapping",
-            raw_text=doc.raw_text,
-        )
+    loaded = _pipeline_root(doc, root, PLATFORM, "workflow root is not a mapping")
+    if isinstance(loaded, PipelineFile):
+        return loaded
+    path, data = loaded
 
     triggers = _normalize_triggers(_on_value(data))
     jobs: list[Job] = []
