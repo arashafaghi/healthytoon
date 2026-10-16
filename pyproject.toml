@@ -29,6 +29,7 @@ dev = [
     "jsonschema>=4.21",
     "mypy>=1.11",
     "pytest>=8.0",
+    "pytest-cov>=7.1.0",
     "radon>=6.0.1",
     "ruff>=0.6",
     "vulture>=2.14",
@@ -52,3 +53,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.coverage.run]
+source = ["healthytoon"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
+

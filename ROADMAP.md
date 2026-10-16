@@ -154,7 +154,7 @@ Additional confirmed decisions:
 - Review all agent results and run final verification.
 - Do not begin Phase 3 until Phase 2 is accepted.
 
-### Phase 3 — Hardening (status: in progress)
+### Phase 3 — Hardening (status: complete — T3.1–T3.3)
 
 - **T3.1 — Baseline and suppression:** Implement finding baselines and suppression using the agreed fingerprint algorithm.
 - **T3.2 — `init` and `explain`:** Add initialization and finding-explanation commands.
