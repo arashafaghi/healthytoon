@@ -304,3 +304,26 @@ def test_vcs_host_unknown_without_git_remote(tmp_path: Path) -> None:
 
     assert artifacts.vcs_host == "unknown"
     assert artifacts.pipelines == ()
+
+
+def test_collect_artifacts_includes_other_platforms(tmp_path: Path) -> None:
+    _write(tmp_path / ".github" / "workflows" / "ci.yml", "on: pull_request\njobs: {}\n")
+    _write(tmp_path / ".gitlab-ci.yml", "test:\n  script:\n    - pytest\n")
+    _write(tmp_path / ".circleci" / "config.yml", "version: 2.1\njobs: {}\n")
+    _write(tmp_path / "Jenkinsfile", "pipeline {}\n")
+
+    artifacts = collect_artifacts(tmp_path)
+
+    assert [pipeline.path for pipeline in artifacts.pipelines] == [
+        ".circleci/config.yml",
+        ".github/workflows/ci.yml",
+        ".gitlab-ci.yml",
+        "Jenkinsfile",
+    ]
+    assert len(artifacts.pipelines) == 4
+    assert {pipeline.platform for pipeline in artifacts.pipelines} == {
+        "github",
+        "gitlab",
+        "circleci",
+        "jenkins",
+    }

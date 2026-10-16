@@ -26,6 +26,8 @@ from healthytoon.cicd.checks_p1 import (
     PythonMatrixCheck,
     TriggersPullRequestCheck,
 )
+from healthytoon.cicd.circleci import parse_circleci_config
+from healthytoon.cicd.gitlab import parse_gitlab_ci
 from healthytoon.cicd.ir import (
     ActionRef,
     CIArtifacts,
@@ -34,6 +36,7 @@ from healthytoon.cicd.ir import (
     PipelineFile,
     Step,
 )
+from healthytoon.cicd.jenkins import detect_jenkins
 from healthytoon.core.protocols import Check
 
 __all__ = [
@@ -44,6 +47,9 @@ __all__ = [
     "PipelineFile",
     "Step",
     "builtin_checks",
+    "detect_jenkins",
+    "parse_circleci_config",
+    "parse_gitlab_ci",
 ]
 
 

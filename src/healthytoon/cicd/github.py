@@ -21,7 +21,10 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
+from healthytoon.cicd.circleci import parse_circleci_config
+from healthytoon.cicd.gitlab import parse_gitlab_ci
 from healthytoon.cicd.ir import ActionRef, CIArtifacts, Job, PipelineFile, Step
+from healthytoon.cicd.jenkins import JENKINSFILE, detect_jenkins
 from healthytoon.cicd.loader import RawDocument, load_yaml
 from healthytoon.core.discovery import discover_files
 from healthytoon.core.types import Location
@@ -347,6 +350,28 @@ def _is_workflow_file(rel: str) -> bool:
     )
 
 
+def _is_gitlab_file(rel: str) -> bool:
+    return rel in {".gitlab-ci.yml", ".gitlab-ci.yaml"}
+
+
+def _is_circleci_config(rel: str) -> bool:
+    return rel == ".circleci/config.yml"
+
+
+def _parse_pipeline(rel: str, root_path: Path, by_rel: Mapping[str, Path]) -> PipelineFile | None:
+    """Parse ``rel`` with the adapter for its platform, or return ``None``."""
+
+    if _is_workflow_file(rel):
+        return parse_github_workflow(load_yaml(by_rel[rel]), root_path)
+    if _is_gitlab_file(rel):
+        return parse_gitlab_ci(load_yaml(by_rel[rel]), root_path)
+    if _is_circleci_config(rel):
+        return parse_circleci_config(load_yaml(by_rel[rel]), root_path)
+    if rel == JENKINSFILE:
+        return detect_jenkins(root_path)
+    return None
+
+
 def _is_dependabot(rel: str) -> bool:
     return rel in {".github/dependabot.yml", ".github/dependabot.yaml"}
 
@@ -432,10 +457,12 @@ def collect_artifacts(root: Path) -> CIArtifacts:
         by_rel[_relative_posix(path, root_path)] = path
     rels = sorted(by_rel)
 
-    workflow_rels = [rel for rel in rels if _is_workflow_file(rel)]
-    pipelines = tuple(
-        parse_github_workflow(load_yaml(by_rel[rel]), root_path) for rel in workflow_rels
-    )
+    pipelines_list: list[PipelineFile] = []
+    for rel in rels:
+        parsed = _parse_pipeline(rel, root_path, by_rel)
+        if parsed is not None:
+            pipelines_list.append(parsed)
+    pipelines = tuple(pipelines_list)
 
     project_rels = [rel for rel in rels if Path(rel).name in _PROJECT_FILE_NAMES]
     roots = _package_roots(project_rels)
