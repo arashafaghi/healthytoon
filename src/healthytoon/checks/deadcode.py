@@ -113,6 +113,80 @@ def _result(check_id: str, findings: list[Finding]) -> CheckResult:
     return CheckResult(check=check_id, findings=tuple(findings), status=status)
 
 
+def _run_vulture(
+    executable: str, min_confidence: int, paths: Sequence[Path], root: Path
+) -> subprocess.CompletedProcess[str] | None:
+    """Run Vulture over ``paths``, or ``None`` when it cannot be launched."""
+
+    args = [
+        executable,
+        "--min-confidence",
+        str(min_confidence),
+        *(str(path) for path in paths),
+    ]
+    try:
+        return subprocess.run(args, cwd=root, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _dead_code_finding(check: DeadCodeCheck, issue: _VultureIssue, root: Path) -> Finding:
+    """Build the finding for one parsed, non-whitelisted Vulture issue."""
+
+    return Finding(
+        rule_id=check.rule_id,
+        check=check.id,
+        category=check.category,
+        severity=check.default_severity,
+        title="Dead code",
+        message=issue.message,
+        location=Location(file=_relative_posix(Path(issue.file), root), line=issue.line),
+        symbol=issue.symbol,
+        properties={"confidence": issue.confidence},
+        remediation=Remediation(
+            summary="Remove the dead code or reference it explicitly",
+            detail=(
+                "Delete the unused definition, or add it to ``__all__`` / "
+                "the configured whitelist when an external framework "
+                "imports it dynamically."
+            ),
+        ),
+    )
+
+
+def _analysis_findings(
+    check: DeadCodeCheck,
+    issues: Sequence[_VultureIssue],
+    whitelist: frozenset[str],
+    root: Path,
+) -> list[Finding]:
+    """Turn parsed Vulture issues into findings, dropping whitelisted symbols."""
+
+    return [
+        _dead_code_finding(check, issue, root)
+        for issue in issues
+        if not _is_whitelisted(issue.symbol, whitelist)
+    ]
+
+
+def _finding_sort_key(finding: Finding) -> tuple[str, int, str, str]:
+    """Return the deterministic ordering key for dead-code findings."""
+
+    location = finding.location
+    file = location.file if location else ""
+    line = location.line if location and location.line else 0
+    return (file, line, finding.symbol or "", finding.message)
+
+
+def _whitelist_for(
+    ctx: CheckContext, paths: Sequence[Path], user_whitelist: Sequence[str]
+) -> frozenset[str]:
+    """Collect the framework and user whitelisted names for ``paths``."""
+
+    modules = [module for module in (ctx.parse_ast(path) for path in paths) if module]
+    return frozenset(_framework_whitelist(modules, user_whitelist))
+
+
 def _parse_confidence(message: str) -> tuple[str, int]:
     """Split a Vulture message into ``(message without suffix, confidence)``."""
 
@@ -270,23 +344,10 @@ class DeadCodeCheck:
         user_whitelist = _string_list_option(options, "whitelist")
 
         paths = sorted(ctx.files_for(self.file_kinds))
-        modules = [module for module in (ctx.parse_ast(path) for path in paths) if module]
-        whitelist = frozenset(_framework_whitelist(modules, user_whitelist))
+        whitelist = _whitelist_for(ctx, paths, user_whitelist)
 
-        args = [
-            executable,
-            "--min-confidence",
-            str(min_confidence),
-            *(str(path) for path in paths),
-        ]
-        try:
-            completed = subprocess.run(
-                args,
-                cwd=ctx.root,
-                capture_output=True,
-                text=True,
-            )
-        except (OSError, subprocess.SubprocessError):
+        completed = _run_vulture(executable, min_confidence, paths, ctx.root)
+        if completed is None:
             return CheckResult(
                 check=self.id,
                 status=Status.SKIP,
@@ -304,39 +365,6 @@ class DeadCodeCheck:
                 ),
             )
 
-        findings: list[Finding] = []
-        for issue in issues:
-            if _is_whitelisted(issue.symbol, whitelist):
-                continue
-            file = _relative_posix(Path(issue.file), ctx.root)
-            findings.append(
-                Finding(
-                    rule_id=self.rule_id,
-                    check=self.id,
-                    category=self.category,
-                    severity=self.default_severity,
-                    title="Dead code",
-                    message=issue.message,
-                    location=Location(file=file, line=issue.line),
-                    symbol=issue.symbol,
-                    properties={"confidence": issue.confidence},
-                    remediation=Remediation(
-                        summary="Remove the dead code or reference it explicitly",
-                        detail=(
-                            "Delete the unused definition, or add it to ``__all__`` / "
-                            "the configured whitelist when an external framework "
-                            "imports it dynamically."
-                        ),
-                    ),
-                )
-            )
-
-        findings.sort(
-            key=lambda finding: (
-                finding.location.file if finding.location else "",
-                finding.location.line if finding.location and finding.location.line else 0,
-                finding.symbol or "",
-                finding.message,
-            )
-        )
+        findings = _analysis_findings(self, issues, whitelist, ctx.root)
+        findings.sort(key=_finding_sort_key)
         return _result(self.id, findings[:_MAX_FINDINGS])

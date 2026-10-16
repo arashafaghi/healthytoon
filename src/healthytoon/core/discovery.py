@@ -167,6 +167,75 @@ def _match_any(globs: tuple[_Glob, ...], rel: str, *, is_dir: bool) -> bool:
     return any(glob.matches(rel, is_dir=is_dir) for glob in globs)
 
 
+def _scan_directory(directory: Path) -> list[os.DirEntry[str]]:
+    """Return the sorted entries of ``directory``, or ``[]`` when unreadable."""
+
+    try:
+        with os.scandir(directory) as iterator:
+            return sorted(iterator, key=lambda entry: entry.name)
+    except OSError:
+        return []
+
+
+def _entry_is_dir(entry: os.DirEntry[str]) -> bool | None:
+    """Return whether ``entry`` is a directory, or ``None`` when unknown."""
+
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return None
+
+
+class _Walker:
+    """Stateful walker that accumulates the regular files under one root."""
+
+    def __init__(
+        self,
+        *,
+        include_globs: tuple[_Glob, ...],
+        exclude_globs: tuple[_Glob, ...],
+        respect_gitignore: bool,
+    ) -> None:
+        self._include_globs = include_globs
+        self._exclude_globs = exclude_globs
+        self._respect_gitignore = respect_gitignore
+        self.found: list[Path] = []
+        self.seen: set[Path] = set()
+
+    def walk(self, directory: Path, rel_dir: str, rules: tuple[_IgnoreRule, ...]) -> None:
+        if self._respect_gitignore:
+            rules = _extend_ignore_rules(directory, rel_dir, rules)
+        for entry in _scan_directory(directory):
+            self._visit(entry, rel_dir, rules)
+
+    def _visit(self, entry: os.DirEntry[str], rel_dir: str, rules: tuple[_IgnoreRule, ...]) -> None:
+        if entry.is_symlink():
+            return
+        rel = entry.name if not rel_dir else f"{rel_dir}/{entry.name}"
+        is_dir = _entry_is_dir(entry)
+        if is_dir is None:
+            return
+        if _match_any(self._exclude_globs, rel, is_dir=is_dir):
+            return
+        if rules and _is_ignored(rules, rel, is_dir=is_dir):
+            return
+        if is_dir:
+            self.walk(Path(entry.path), rel, rules)
+            return
+        self._add_file(entry, rel)
+
+    def _add_file(self, entry: os.DirEntry[str], rel: str) -> None:
+        if not entry.is_file(follow_symlinks=False):
+            return
+        if self._include_globs and not _match_any(self._include_globs, rel, is_dir=False):
+            return
+        resolved = Path(entry.path).resolve()
+        if resolved in self.seen:
+            return
+        self.seen.add(resolved)
+        self.found.append(resolved)
+
+
 def discover_files(
     root: Path,
     *,
@@ -187,48 +256,14 @@ def discover_files(
         raise TargetError(f"target is not a directory: {root_path}")
     resolved_root = root_path.resolve()
 
-    include_globs = tuple(_compile_glob(p.rstrip("/")) for p in include if p.strip())
-    exclude_globs = tuple(_compile_glob(p) for p in exclude if p.strip())
-
-    found: list[Path] = []
-    seen: set[Path] = set()
-
-    def walk(directory: Path, rel_dir: str, rules: tuple[_IgnoreRule, ...]) -> None:
-        if respect_gitignore:
-            rules = _extend_ignore_rules(directory, rel_dir, rules)
-        try:
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name)
-        except OSError:
-            return
-        for entry in entries:
-            if entry.is_symlink():
-                continue
-            rel = entry.name if not rel_dir else f"{rel_dir}/{entry.name}"
-            try:
-                is_dir = entry.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if _match_any(exclude_globs, rel, is_dir=is_dir):
-                continue
-            if rules and _is_ignored(rules, rel, is_dir=is_dir):
-                continue
-            if is_dir:
-                walk(Path(entry.path), rel, rules)
-                continue
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            if include_globs and not _match_any(include_globs, rel, is_dir=False):
-                continue
-            resolved = Path(entry.path).resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            found.append(resolved)
-
-    walk(resolved_root, "", ())
-    found.sort(key=lambda path: path.relative_to(resolved_root).as_posix())
-    return tuple(found)
+    walker = _Walker(
+        include_globs=tuple(_compile_glob(p.rstrip("/")) for p in include if p.strip()),
+        exclude_globs=tuple(_compile_glob(p) for p in exclude if p.strip()),
+        respect_gitignore=respect_gitignore,
+    )
+    walker.walk(resolved_root, "", ())
+    walker.found.sort(key=lambda path: path.relative_to(resolved_root).as_posix())
+    return tuple(walker.found)
 
 
 def iter_python_files(files: Sequence[Path]) -> tuple[Path, ...]:
@@ -241,6 +276,18 @@ _WORKFLOW_NAMES = frozenset({".gitlab-ci.yml", ".gitlab-ci.yaml"})
 _LOCKFILE_NAMES = frozenset({"uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock"})
 _CONFIG_SUFFIXES = frozenset({".toml", ".cfg", ".ini", ".json", ".yml", ".yaml", ".properties"})
 _YAML_SUFFIXES = frozenset({".yml", ".yaml"})
+
+
+def _is_workflow(candidate: Path, name: str, suffix: str) -> bool:
+    return name in _WORKFLOW_NAMES or (".github" in candidate.parts and suffix in _YAML_SUFFIXES)
+
+
+def _is_requirements(name: str, suffix: str) -> bool:
+    return name.startswith("requirements") and suffix == ".txt"
+
+
+def _is_config(name: str, suffix: str) -> bool:
+    return suffix in _CONFIG_SUFFIXES or name.startswith(".")
 
 
 def classify_file(path: Path | str) -> FileKind:
@@ -259,18 +306,16 @@ def classify_file(path: Path | str) -> FileKind:
         return FileKind.STUB
     if suffix == ".py":
         return FileKind.PYTHON
-    if name in _WORKFLOW_NAMES:
-        return FileKind.WORKFLOW
-    if ".github" in candidate.parts and suffix in _YAML_SUFFIXES:
+    if _is_workflow(candidate, name, suffix):
         return FileKind.WORKFLOW
     if name == "pyproject.toml":
         return FileKind.PYPROJECT
     if name in _LOCKFILE_NAMES:
         return FileKind.LOCKFILE
-    if name.startswith("requirements") and suffix == ".txt":
+    if _is_requirements(name, suffix):
         return FileKind.REQUIREMENTS
     if suffix == ".md":
         return FileKind.MARKDOWN
-    if suffix in _CONFIG_SUFFIXES or name.startswith("."):
+    if _is_config(name, suffix):
         return FileKind.CONFIG
     return FileKind.OTHER

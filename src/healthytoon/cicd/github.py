@@ -447,44 +447,76 @@ def _detect_vcs_host(root: Path) -> str:
     return "unknown"
 
 
+def _index_by_rel(root_path: Path, discovered: Sequence[Path]) -> dict[str, Path]:
+    """Map each discovered file to its root-relative POSIX path."""
+
+    by_rel: dict[str, Path] = {}
+    for path in discovered:
+        by_rel[_relative_posix(path, root_path)] = path
+    return by_rel
+
+
+def _collect_pipelines(
+    rels: Sequence[str], root_path: Path, by_rel: Mapping[str, Path]
+) -> tuple[PipelineFile, ...]:
+    """Parse every recognised pipeline file, in ``rels`` order."""
+
+    pipelines: list[PipelineFile] = []
+    for rel in rels:
+        parsed = _parse_pipeline(rel, root_path, by_rel)
+        if parsed is not None:
+            pipelines.append(parsed)
+    return tuple(pipelines)
+
+
+def _project_rels(rels: Sequence[str]) -> list[str]:
+    """Return the package-manifest paths that mark a package root."""
+
+    return [rel for rel in rels if Path(rel).name in _PROJECT_FILE_NAMES]
+
+
+def _discover_pyproject(by_rel: Mapping[str, Path], rels: Sequence[str]) -> str | None:
+    """Prefer a root ``pyproject.toml``, else the first one found at any depth."""
+
+    if "pyproject.toml" in by_rel:
+        return "pyproject.toml"
+    return _first(rels, lambda rel: Path(rel).name == "pyproject.toml")
+
+
+def _read_pyproject_at(
+    by_rel: Mapping[str, Path], relative: str | None
+) -> tuple[Mapping[str, object] | None, str | None]:
+    """Read the selected ``pyproject.toml``, or ``(None, None)`` when absent."""
+
+    if relative is None:
+        return None, None
+    return _read_pyproject(by_rel[relative])
+
+
+def _lockfiles(rels: Sequence[str]) -> tuple[str, ...]:
+    """Return the recognised lockfile paths in ``rels`` order."""
+
+    return tuple(rel for rel in rels if _is_lockfile(rel))
+
+
 def collect_artifacts(root: Path) -> CIArtifacts:
     """Discover CI/CD artifacts under ``root`` in deterministic order."""
 
     root_path = Path(root)
     discovered = discover_files(root_path, exclude=_ARTIFACT_EXCLUDES)
-    by_rel: dict[str, Path] = {}
-    for path in discovered:
-        by_rel[_relative_posix(path, root_path)] = path
+    by_rel = _index_by_rel(root_path, discovered)
     rels = sorted(by_rel)
 
-    pipelines_list: list[PipelineFile] = []
-    for rel in rels:
-        parsed = _parse_pipeline(rel, root_path, by_rel)
-        if parsed is not None:
-            pipelines_list.append(parsed)
-    pipelines = tuple(pipelines_list)
-
-    project_rels = [rel for rel in rels if Path(rel).name in _PROJECT_FILE_NAMES]
-    roots = _package_roots(project_rels)
-
-    pyproject_rel: str | None
-    if "pyproject.toml" in by_rel:
-        pyproject_rel = "pyproject.toml"
-    else:
-        pyproject_rel = _first(
-            [rel for rel in rels if Path(rel).name == "pyproject.toml"], lambda _rel: True
-        )
-    pyproject: Mapping[str, object] | None = None
-    requires_python: str | None = None
-    if pyproject_rel is not None:
-        pyproject, requires_python = _read_pyproject(by_rel[pyproject_rel])
+    pipelines = _collect_pipelines(rels, root_path, by_rel)
+    roots = _package_roots(_project_rels(rels))
+    pyproject, requires_python = _read_pyproject_at(by_rel, _discover_pyproject(by_rel, rels))
 
     return CIArtifacts(
         pipelines=pipelines,
         dependabot=_first(rels, _is_dependabot),
         renovate=_first(rels, _is_renovate),
         pre_commit=_first(rels, _is_pre_commit),
-        lockfiles=tuple(rel for rel in rels if _is_lockfile(rel)),
+        lockfiles=_lockfiles(rels),
         python_version_file=_first(rels, _is_python_version_file),
         pyproject_requires_python=requires_python,
         pyproject=pyproject,

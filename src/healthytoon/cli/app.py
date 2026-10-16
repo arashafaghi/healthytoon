@@ -94,15 +94,13 @@ app.command("list")(list_command.run)
 app.command("version")(version_command.run)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the CLI and return its process exit code.
+def _invoke_app(args: list[str] | None) -> int:
+    """Invoke the Typer app and translate its exceptions into exit codes.
 
-    ``argv`` defaults to ``sys.argv[1:]`` when ``None``. Nothing is raised for
-    normal or error paths; the return value is always a valid exit code.
+    Click/Typer raise on every documented failure path; this helper owns the
+    mapping onto the historical return-value contract so :func:`main` only has
+    to delegate to it.
     """
-
-    _configure_streams()
-    args = list(argv) if argv is not None else None
 
     try:
         result = app(args=args, standalone_mode=False)
@@ -134,3 +132,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_INTERNAL
 
     return int(result) if result is not None else 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the CLI and return its process exit code.
+
+    ``argv`` defaults to ``sys.argv[1:]`` when ``None``. Nothing is raised for
+    normal or error paths; the return value is always a valid exit code.
+    """
+
+    _configure_streams()
+    args = list(argv) if argv is not None else None
+    return _invoke_app(args)

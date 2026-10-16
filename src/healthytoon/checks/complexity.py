@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from types import ModuleType
 
 from healthytoon.checks import _optional
 from healthytoon.core.context import CheckContext
@@ -94,6 +95,58 @@ def _result(check_id: str, findings: list[Finding]) -> CheckResult:
     return CheckResult(check=check_id, findings=tuple(findings), status=status)
 
 
+def _complexity_finding(
+    check: ComplexityCheck,
+    block: object,
+    file: str,
+    max_cyclomatic: int,
+) -> Finding:
+    """Build the finding for one over-threshold Radon block."""
+
+    complexity = _block_int(block, "complexity", 1)
+    symbol = _block_symbol(block)
+    return Finding(
+        rule_id=check.rule_id,
+        check=check.id,
+        category=check.category,
+        severity=check.default_severity,
+        title="High cyclomatic complexity",
+        message=(f"{symbol} has cyclomatic complexity {complexity} (max {max_cyclomatic})"),
+        location=Location(file=file, line=_block_int(block, "lineno", 1)),
+        symbol=symbol,
+        properties={"complexity": complexity, "max": max_cyclomatic},
+        remediation=Remediation(
+            summary=f"Reduce the complexity of {symbol}",
+            detail=(
+                "Extract branches into named helpers, replace nested "
+                "conditionals with guard clauses, or split unrelated "
+                "concerns so the block has fewer decision points."
+            ),
+        ),
+    )
+
+
+def _file_findings(
+    check: ComplexityCheck,
+    radon: ModuleType,
+    ctx: CheckContext,
+    path: Path,
+    max_cyclomatic: int,
+) -> list[Finding]:
+    """Return the complexity findings for a single Python file."""
+
+    try:
+        blocks = radon.cc_visit(ctx.read_text(path))
+    except (SyntaxError, ValueError):
+        return []
+    file = _relative_posix(path, ctx.root)
+    findings: list[Finding] = []
+    for block in blocks:
+        if _block_int(block, "complexity", 1) > max_cyclomatic:
+            findings.append(_complexity_finding(check, block, file, max_cyclomatic))
+    return findings
+
+
 class ComplexityCheck:
     """Flag blocks whose cyclomatic complexity exceeds ``max_cyclomatic``."""
 
@@ -122,42 +175,7 @@ class ComplexityCheck:
 
         findings: list[Finding] = []
         for path in sorted(ctx.files_for(self.file_kinds)):
-            source = ctx.read_text(path)
-            try:
-                blocks = radon.cc_visit(source)
-            except (SyntaxError, ValueError):
-                continue
-            file = _relative_posix(path, ctx.root)
-            for block in blocks:
-                complexity = _block_int(block, "complexity", 1)
-                if complexity <= max_cyclomatic:
-                    continue
-                symbol = _block_symbol(block)
-                line = _block_int(block, "lineno", 1)
-                findings.append(
-                    Finding(
-                        rule_id=self.rule_id,
-                        check=self.id,
-                        category=self.category,
-                        severity=self.default_severity,
-                        title="High cyclomatic complexity",
-                        message=(
-                            f"{symbol} has cyclomatic complexity {complexity} "
-                            f"(max {max_cyclomatic})"
-                        ),
-                        location=Location(file=file, line=line),
-                        symbol=symbol,
-                        properties={"complexity": complexity, "max": max_cyclomatic},
-                        remediation=Remediation(
-                            summary=f"Reduce the complexity of {symbol}",
-                            detail=(
-                                "Extract branches into named helpers, replace nested "
-                                "conditionals with guard clauses, or split unrelated "
-                                "concerns so the block has fewer decision points."
-                            ),
-                        ),
-                    )
-                )
+            findings.extend(_file_findings(self, radon, ctx, path, max_cyclomatic))
 
         findings.sort(
             key=lambda finding: (

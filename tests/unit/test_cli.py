@@ -24,9 +24,7 @@ def _make_target(root: Path) -> Path:
     return root
 
 
-def _make_clean_target(root: Path) -> Path:
-    """Build a minimal fixture that satisfies every built-in check."""
-
+def _write_clean_module(root: Path) -> None:
     package = root / "src"
     package.mkdir(parents=True, exist_ok=True)
     (package / "a.py").write_text(
@@ -35,6 +33,9 @@ def _make_clean_target(root: Path) -> Path:
         '    """Return ``value`` plus one."""\n    return value + 1\n',
         encoding="utf-8",
     )
+
+
+def _write_healthy_workflow(root: Path) -> None:
     # The CI/CD checks are always-on, so a fixture that satisfies *every*
     # built-in needs a healthy CI configuration too.
     sha = "a" * 40
@@ -66,6 +67,9 @@ def _make_clean_target(root: Path) -> Path:
         "      - run: uv sync --frozen\n",
         encoding="utf-8",
     )
+
+
+def _write_dependabot(root: Path) -> None:
     (root / ".github" / "dependabot.yml").write_text(
         "version: 2\n"
         "updates:\n"
@@ -75,6 +79,14 @@ def _make_clean_target(root: Path) -> Path:
         '      interval: "weekly"\n',
         encoding="utf-8",
     )
+
+
+def _make_clean_target(root: Path) -> Path:
+    """Build a minimal fixture that satisfies every built-in check."""
+
+    _write_clean_module(root)
+    _write_healthy_workflow(root)
+    _write_dependabot(root)
     (root / "uv.lock").write_text("", encoding="utf-8")
     return root
 

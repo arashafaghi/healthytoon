@@ -94,6 +94,15 @@ def test_invalid_utf8_is_replaced_not_raised(tmp_path: Path) -> None:
     assert doc.data["key"] == "\ufffd\ufffd"
 
 
+def _assert_native_scalars(data: dict[str, object]) -> None:
+    # Genuine YAML scalars keep their native types.
+    assert data["count"] == 30
+    assert isinstance(data["count"], int)
+    assert data["retries"] == "1.5"
+    assert data["flag"] is True
+    assert data["nothing"] is None
+
+
 def test_unquoted_version_scalar_stays_a_string(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "wf.yml",
@@ -116,12 +125,7 @@ def test_unquoted_version_scalar_stays_a_string(tmp_path: Path) -> None:
     assert doc.data["python-version"] == "3.10"
     assert doc.data["patch-version"] == "3.12.1"
     assert doc.data["matrix"] == {"python-version": ["3.10", "3.8", "3.12"]}
-    # Genuine YAML scalars keep their native types.
-    assert doc.data["count"] == 30
-    assert isinstance(doc.data["count"], int)
-    assert doc.data["retries"] == "1.5"
-    assert doc.data["flag"] is True
-    assert doc.data["nothing"] is None
+    _assert_native_scalars(doc.data)
 
 
 def test_quoted_version_scalar_remains_a_string(tmp_path: Path) -> None:

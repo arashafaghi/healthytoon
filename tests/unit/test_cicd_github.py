@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from healthytoon.cicd.github import collect_artifacts, parse_github_workflow
-from healthytoon.cicd.ir import PipelineFile
+from healthytoon.cicd.ir import Job, PipelineFile
 from healthytoon.cicd.loader import RawDocument, load_yaml
 
 _SHA = "a" * 40
@@ -70,42 +72,59 @@ def _parse(tmp_path: Path, text: str, name: str = "wf.yml") -> PipelineFile:
     return parse_github_workflow(load_yaml(path), tmp_path)
 
 
-def _parse_fixture(tmp_path: Path) -> PipelineFile:
+def _jobs_by_id(pipeline: PipelineFile) -> dict[str, Job]:
+    return {job.id: job for job in pipeline.jobs}
+
+
+@pytest.fixture
+def representative(tmp_path: Path) -> PipelineFile:
     return _parse(tmp_path, _WORKFLOW, ".github/workflows/ci.yml")
 
 
-def test_parse_representative_workflow(tmp_path: Path) -> None:
-    pipeline = _parse_fixture(tmp_path)
+@pytest.fixture
+def representative_test_job(representative: PipelineFile) -> Job:
+    return _jobs_by_id(representative)["test"]
 
-    assert pipeline.platform == "github"
-    assert pipeline.path == ".github/workflows/ci.yml"
-    assert pipeline.triggers == ("push", "pull_request", "workflow_call")
-    assert pipeline.is_reusable is True
-    assert pipeline.parse_error is None
-    assert dict(pipeline.permissions or {}) == {"contents": "read"}
-    assert dict(pipeline.concurrency or {}) == {
+
+def test_parse_representative_workflow(representative: PipelineFile) -> None:
+    assert representative.platform == "github"
+    assert representative.path == ".github/workflows/ci.yml"
+    assert representative.triggers == ("push", "pull_request", "workflow_call")
+    assert representative.is_reusable is True
+    assert representative.parse_error is None
+    assert dict(representative.permissions or {}) == {"contents": "read"}
+    assert dict(representative.concurrency or {}) == {
         "group": "${{ github.workflow }}",
         "cancel-in-progress": True,
     }
+    assert set(_jobs_by_id(representative)) == {"deploy", "test"}
 
-    jobs = {job.id: job for job in pipeline.jobs}
-    assert set(jobs) == {"deploy", "test"}
 
-    test_job = jobs["test"]
-    assert test_job.pointer == "/jobs/test"
-    assert test_job.name == "Test"
-    assert test_job.runs_on == ("ubuntu-latest",)
-    assert test_job.timeout_minutes == 30
-    assert dict(test_job.matrix) == {
+def test_parse_representative_test_job(representative_test_job: Job) -> None:
+    assert representative_test_job.pointer == "/jobs/test"
+    assert representative_test_job.name == "Test"
+    assert representative_test_job.runs_on == ("ubuntu-latest",)
+    assert representative_test_job.timeout_minutes == 30
+    assert dict(representative_test_job.matrix) == {
         "python-version": ("3.11", "3.12"),
         "os": ("ubuntu-latest", "macos-latest"),
     }
-    assert test_job.python_versions == ("3.11", "3.12")
-    assert dict(test_job.permissions or {}) == {"contents": "read", "id-token": "write"}
-    assert dict(test_job.env) == {"FOO": "bar"}
-    assert test_job.triggers == ("push", "pull_request", "workflow_call")
+    assert representative_test_job.python_versions == ("3.11", "3.12")
 
-    assert [step.pointer for step in test_job.steps] == [
+
+def test_parse_representative_test_job_permissions_env_triggers(
+    representative_test_job: Job,
+) -> None:
+    assert dict(representative_test_job.permissions or {}) == {
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert dict(representative_test_job.env) == {"FOO": "bar"}
+    assert representative_test_job.triggers == ("push", "pull_request", "workflow_call")
+
+
+def test_parse_representative_step_pointers(representative_test_job: Job) -> None:
+    assert [step.pointer for step in representative_test_job.steps] == [
         "/jobs/test/steps/0",
         "/jobs/test/steps/1",
         "/jobs/test/steps/2",
@@ -115,12 +134,8 @@ def test_parse_representative_workflow(tmp_path: Path) -> None:
     ]
 
 
-def test_action_refs_classify_pinned_first_party_docker_local_expression(
-    tmp_path: Path,
-) -> None:
-    test_job = {job.id: job for job in _parse_fixture(tmp_path).jobs}["test"]
-
-    checkout = test_job.steps[0].action
+def test_action_refs_classify_pinned_first_party(representative_test_job: Job) -> None:
+    checkout = representative_test_job.steps[0].action
     assert checkout is not None
     assert checkout.pinned_to_sha is True
     assert checkout.is_first_party is True
@@ -128,35 +143,43 @@ def test_action_refs_classify_pinned_first_party_docker_local_expression(
     assert checkout.location is not None
     assert checkout.location.file == ".github/workflows/ci.yml"
 
-    setup = test_job.steps[1].action
+
+def test_action_refs_classify_version_tag(representative_test_job: Job) -> None:
+    setup = representative_test_job.steps[1].action
     assert setup is not None
     assert setup.owner == "actions"
     assert setup.repo == "setup-python"
     assert setup.ref == "v5"
     assert setup.pinned_to_sha is False
 
-    run_step = test_job.steps[2]
+
+def test_action_refs_classify_run_step(representative_test_job: Job) -> None:
+    run_step = representative_test_job.steps[2]
     assert run_step.run == "pytest -q"
     assert run_step.if_ == "${{ success() }}"
     assert run_step.continue_on_error is True
     assert run_step.action is None
 
-    docker = test_job.steps[3].action
+
+def test_action_refs_classify_docker(representative_test_job: Job) -> None:
+    docker = representative_test_job.steps[3].action
     assert docker is not None
     assert docker.is_docker is True
     assert docker.owner is None and docker.ref is None
 
-    local = test_job.steps[4].action
+
+def test_action_refs_classify_local_and_expression(representative_test_job: Job) -> None:
+    local = representative_test_job.steps[4].action
     assert local is not None
     assert local.is_local is True
 
-    expression = test_job.steps[5].action
+    expression = representative_test_job.steps[5].action
     assert expression is not None
     assert expression.is_expression is True
 
 
-def test_reusable_job_uses_is_parsed(tmp_path: Path) -> None:
-    deploy = {job.id: job for job in _parse_fixture(tmp_path).jobs}["deploy"]
+def test_reusable_job_uses_is_parsed(representative: PipelineFile) -> None:
+    deploy = _jobs_by_id(representative)["deploy"]
 
     assert deploy.is_reusable is True
     assert len(deploy.uses) == 1
@@ -266,7 +289,8 @@ def test_non_mapping_root_is_a_parse_error(tmp_path: Path) -> None:
     assert pipeline.jobs == ()
 
 
-def test_collect_artifacts_discovers_repository_inputs(tmp_path: Path) -> None:
+@pytest.fixture
+def repo_with_inputs(tmp_path: Path) -> Path:
     _write(tmp_path / ".github" / "workflows" / "ci.yml", "on: push\njobs: {}\n")
     _write(tmp_path / ".github" / "dependabot.yml", "version: 2\n")
     _write(tmp_path / "renovate.json", "{}\n")
@@ -283,8 +307,11 @@ def test_collect_artifacts_discovers_repository_inputs(tmp_path: Path) -> None:
         tmp_path / ".git" / "config",
         '[remote "origin"]\n\turl = git@github.com:acme/demo.git\n',
     )
+    return tmp_path
 
-    artifacts = collect_artifacts(tmp_path)
+
+def test_collect_artifacts_discovers_pipelines_and_configs(repo_with_inputs: Path) -> None:
+    artifacts = collect_artifacts(repo_with_inputs)
 
     assert [pipeline.path for pipeline in artifacts.pipelines] == [".github/workflows/ci.yml"]
     assert artifacts.dependabot == ".github/dependabot.yml"
@@ -292,6 +319,11 @@ def test_collect_artifacts_discovers_repository_inputs(tmp_path: Path) -> None:
     assert artifacts.pre_commit == ".pre-commit-config.yaml"
     assert artifacts.lockfiles == ("requirements-dev.txt", "uv.lock")
     assert artifacts.python_version_file == ".python-version"
+
+
+def test_collect_artifacts_reports_project_metadata(repo_with_inputs: Path) -> None:
+    artifacts = collect_artifacts(repo_with_inputs)
+
     assert artifacts.pyproject_requires_python == ">=3.11"
     assert artifacts.pyproject is not None
     assert artifacts.is_monorepo is True

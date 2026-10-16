@@ -6,7 +6,7 @@ from pathlib import Path
 
 from healthytoon.cicd.checks_p0 import TestsPresentCheck, WorkflowPresentCheck
 from healthytoon.cicd.gitlab import gitlab_pinning_targets, parse_gitlab_ci
-from healthytoon.cicd.ir import CIArtifacts, CIContext, PipelineFile
+from healthytoon.cicd.ir import CIArtifacts, CIContext, Job, PipelineFile
 from healthytoon.cicd.loader import RawDocument, load_yaml
 
 _GITLAB = """\
@@ -50,6 +50,23 @@ def _parse(tmp_path: Path, text: str | None = None) -> PipelineFile:
     return parse_gitlab_ci(_load(tmp_path, text), tmp_path)
 
 
+_RESERVED_KEYS = (
+    "stages",
+    "variables",
+    "include",
+    "default",
+    "workflow",
+    "image",
+    "before_script",
+    "after_script",
+)
+
+
+def _assert_reserved_keys_absent(jobs: dict[str, Job]) -> None:
+    for reserved in _RESERVED_KEYS:
+        assert reserved not in jobs
+
+
 def test_parse_representative_gitlab_ci(tmp_path: Path) -> None:
     pipeline = _parse(tmp_path)
 
@@ -59,24 +76,22 @@ def test_parse_representative_gitlab_ci(tmp_path: Path) -> None:
 
     jobs = {job.id: job for job in pipeline.jobs}
     assert "test" in jobs
-    for reserved in (
-        "stages",
-        "variables",
-        "include",
-        "default",
-        "workflow",
-        "image",
-        "before_script",
-        "after_script",
-    ):
-        assert reserved not in jobs
+    _assert_reserved_keys_absent(jobs)
 
-    test_job = jobs["test"]
+
+def test_parse_representative_gitlab_test_job(tmp_path: Path) -> None:
+    pipeline = _parse(tmp_path)
+    test_job = {job.id: job for job in pipeline.jobs}["test"]
+
     assert test_job.pointer == "/test"
     assert test_job.runs_on == ("docker",)
     assert [step.run for step in test_job.steps] == ["echo setup", "python -m pytest"]
     assert test_job.triggers == ("pull_request",)
     assert "pull_request" in pipeline.triggers
+
+
+def test_parse_representative_gitlab_env(tmp_path: Path) -> None:
+    pipeline = _parse(tmp_path)
 
     assert dict(pipeline.env)["image"] == "python:3.12"
     assert dict(pipeline.env)["PIP_CACHE_DIR"] == "$CI_PROJECT_DIR/.cache"

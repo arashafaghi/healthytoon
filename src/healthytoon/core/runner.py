@@ -53,22 +53,46 @@ def run_checks(
     and is not an error.
     """
 
+    findings, outcomes = _execute_all(checks, ctx)
+    unique = _collect_findings(findings, ctx)
+    return Report(
+        tool=tool,
+        target=_build_target(ctx, outcomes),
+        summary=_build_summary(unique),
+        findings=tuple(unique),
+        outcomes=tuple(sorted(outcomes, key=lambda outcome: outcome.check)),
+    )
+
+
+def _execute_all(
+    checks: Sequence[Check], ctx: CheckContext
+) -> tuple[list[Finding], list[CheckOutcome]]:
+    """Run every check once, collecting raw findings and per-check outcomes."""
+
     findings: list[Finding] = []
     outcomes: list[CheckOutcome] = []
-
     for check in checks:
         outcome, result = _execute(check, ctx)
         outcomes.append(outcome)
         if result is not None:
             findings.extend(result.findings)
+    return findings, outcomes
+
+
+def _collect_findings(findings: Sequence[Finding], ctx: CheckContext) -> list[Finding]:
+    """Fingerprint, order, deduplicate, then apply severity overrides."""
 
     resolved = [_with_fingerprint(finding) for finding in findings]
     resolved.sort(key=lambda finding: (canonical_sort_key(finding), finding.fingerprint))
-    unique = _apply_severity_overrides(_deduplicate(resolved), ctx)
+    return _apply_severity_overrides(_deduplicate(resolved), ctx)
+
+
+def _build_summary(unique: Sequence[Finding]) -> Summary:
+    """Aggregate ``unique`` findings into the fixed-shape summary."""
 
     severity_counts = Counter(finding.severity for finding in unique)
     category_counts = Counter(finding.category for finding in unique)
-    summary = Summary(
+    return Summary(
         total=len(unique),
         score=build_score(unique),
         by_severity=MappingProxyType(
@@ -86,19 +110,17 @@ def run_checks(
             }
         ),
     )
-    target = TargetInfo(
+
+
+def _build_target(ctx: CheckContext, outcomes: Sequence[CheckOutcome]) -> TargetInfo:
+    """Describe the scanned target and the checks that actually ran."""
+
+    return TargetInfo(
         path=str(ctx.root),
         files_scanned=len(ctx.files),
         checks_run=tuple(
             sorted(outcome.check for outcome in outcomes if outcome.status is not Status.SKIP)
         ),
-    )
-    return Report(
-        tool=tool,
-        target=target,
-        summary=summary,
-        findings=tuple(unique),
-        outcomes=tuple(sorted(outcomes, key=lambda outcome: outcome.check)),
     )
 
 

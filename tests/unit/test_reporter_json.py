@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import MappingProxyType
+from typing import Any
 
 from healthytoon.core.types import (
     Category,
@@ -81,16 +82,16 @@ def _report(
     )
 
 
-def test_output_parses_as_json() -> None:
-    payload = json.loads(JsonReporter().render(_report((_finding(),))))
-
-    assert isinstance(payload, dict)
+def _assert_tool_and_target(payload: dict[str, Any]) -> None:
     assert payload["tool"] == {"name": "healthytoon", "version": "0.1.0", "schema_version": "1.0"}
     assert payload["target"] == {
         "path": ".",
         "files_scanned": 3,
         "checks_run": ["docs.check", "ci.check"],
     }
+
+
+def _assert_summary(payload: dict[str, Any]) -> None:
     assert payload["summary"]["total"] == 1
     assert payload["summary"]["duration_ms"] == 42
     assert payload["summary"]["score"]["overall"] == 92.0
@@ -98,7 +99,8 @@ def test_output_parses_as_json() -> None:
     assert payload["summary"]["by_severity"] == {"medium": 1}
     assert payload["summary"]["by_category"] == {"maintainability": 1}
 
-    entry = payload["findings"][0]
+
+def _assert_finding_entry(entry: dict[str, Any]) -> None:
     assert entry["rule_id"] == "HT-MAINT-001"
     assert entry["check"] == "example.check"
     assert entry["category"] == "maintainability"
@@ -113,6 +115,15 @@ def test_output_parses_as_json() -> None:
         "column": 3,
         "end_line": None,
     }
+
+
+def test_output_parses_as_json() -> None:
+    payload = json.loads(JsonReporter().render(_report((_finding(),))))
+
+    assert isinstance(payload, dict)
+    _assert_tool_and_target(payload)
+    _assert_summary(payload)
+    _assert_finding_entry(payload["findings"][0])
 
 
 def test_severity_serialized_in_lower_case() -> None:

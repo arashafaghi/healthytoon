@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from healthytoon.core.scoring import DEFAULT_WEIGHTS, SEVERITY_PENALTY, build_score, grade_for
-from healthytoon.core.types import Category, Finding, Location, Severity
+from healthytoon.core.types import Category, Finding, Location, Score, Severity
 
 #: ``by_category`` must always follow the canonical ``Category`` enum order.
 _CANONICAL_ORDER = tuple(Category)
@@ -84,6 +84,14 @@ def test_empty_findings_score_perfect_with_full_category_shape() -> None:
         assert entry.weight == DEFAULT_WEIGHTS[entry.category]
 
 
+def _assert_other_categories_perfect(result: Score) -> None:
+    others = [
+        entry for entry in result.by_category if entry.category is not Category.MAINTAINABILITY
+    ]
+    assert len(others) == 7
+    assert all(entry.score == 100.0 and entry.findings == 0 for entry in others)
+
+
 def test_single_medium_maintainability_finding() -> None:
     result = build_score([_finding(severity=Severity.MEDIUM)])
 
@@ -95,11 +103,7 @@ def test_single_medium_maintainability_finding() -> None:
     assert maintainability.score == 92.0
     assert maintainability.weight == 1.0
     assert maintainability.findings == 1
-    others = [
-        entry for entry in result.by_category if entry.category is not Category.MAINTAINABILITY
-    ]
-    assert len(others) == 7
-    assert all(entry.score == 100.0 and entry.findings == 0 for entry in others)
+    _assert_other_categories_perfect(result)
 
 
 @pytest.mark.parametrize(

@@ -223,6 +223,12 @@ def _jobs(value: object, path: Path) -> int:
     return value
 
 
+def _output_choice(value: object, key: str, allowed: frozenset[str], path: Path) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        raise ConfigError(f"{path}: unknown output.{key}: {value!r}")
+    return value
+
+
 def _output_layer(value: object, path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ConfigError(f"{path}: output must be a table")
@@ -232,15 +238,9 @@ def _output_layer(value: object, path: Path) -> dict[str, object]:
 
     layer: dict[str, object] = {}
     if "format" in value:
-        fmt = value["format"]
-        if not isinstance(fmt, str) or fmt not in _OUTPUT_FORMATS:
-            raise ConfigError(f"{path}: unknown output.format: {fmt!r}")
-        layer["format"] = fmt
+        layer["format"] = _output_choice(value["format"], "format", _OUTPUT_FORMATS, path)
     if "color" in value:
-        color = value["color"]
-        if not isinstance(color, str) or color not in _OUTPUT_COLORS:
-            raise ConfigError(f"{path}: unknown output.color: {color!r}")
-        layer["color"] = color
+        layer["color"] = _output_choice(value["color"], "color", _OUTPUT_COLORS, path)
     if "output" in value:
         destination = value["output"]
         if not isinstance(destination, str):
@@ -293,62 +293,77 @@ def _default_data() -> dict[str, object]:
 def _merge(base: dict[str, object], layer: dict[str, object]) -> None:
     for key, value in layer.items():
         if key == "output" and isinstance(value, dict):
-            output = base.get("output")
-            if not isinstance(output, dict):
-                output = {}
-                base["output"] = output
-            output.update(value)
+            _merge_output(base, value)
         elif key == "rules" and isinstance(value, dict):
-            rules = base.get("rules")
-            if not isinstance(rules, dict):
-                rules = {}
-                base["rules"] = rules
-            for rule_id, rule_value in value.items():
-                existing = rules.get(rule_id)
-                if isinstance(existing, dict) and isinstance(rule_value, dict):
-                    merged = dict(existing)
-                    for rule_key, rule_item in rule_value.items():
-                        if (
-                            rule_key == "options"
-                            and isinstance(merged.get("options"), dict)
-                            and isinstance(rule_item, dict)
-                        ):
-                            options = dict(merged["options"])
-                            options.update(rule_item)
-                            merged["options"] = options
-                        else:
-                            merged[rule_key] = rule_item
-                    rules[rule_id] = merged
-                elif isinstance(rule_value, dict):
-                    rules[rule_id] = dict(rule_value)
+            _merge_rules(base, value)
         else:
             base[key] = value
 
 
-def _build_config(data: dict[str, object], source: str | None) -> Config:
+def _merge_output(base: dict[str, object], value: dict[str, object]) -> None:
+    output = base.get("output")
+    if not isinstance(output, dict):
+        output = {}
+        base["output"] = output
+    output.update(value)
+
+
+def _merge_rules(base: dict[str, object], value: dict[str, object]) -> None:
+    rules = base.get("rules")
+    if not isinstance(rules, dict):
+        rules = {}
+        base["rules"] = rules
+    for rule_id, rule_value in value.items():
+        existing = rules.get(rule_id)
+        if isinstance(existing, dict) and isinstance(rule_value, dict):
+            rules[rule_id] = _merge_rule(existing, rule_value)
+        elif isinstance(rule_value, dict):
+            rules[rule_id] = dict(rule_value)
+
+
+def _merge_rule(existing: dict[str, object], rule_value: dict[str, object]) -> dict[str, object]:
+    merged = dict(existing)
+    for rule_key, rule_item in rule_value.items():
+        current = merged.get(rule_key)
+        if rule_key == "options" and isinstance(current, dict) and isinstance(rule_item, dict):
+            options = dict(current)
+            options.update(rule_item)
+            merged[rule_key] = options
+        else:
+            merged[rule_key] = rule_item
+    return merged
+
+
+def _build_rules(data: dict[str, object]) -> dict[str, RuleConfig]:
     rules_raw = data.get("rules")
     rules: dict[str, RuleConfig] = {}
-    if isinstance(rules_raw, dict):
-        for rule_id, rule_value in rules_raw.items():
-            if not isinstance(rule_value, dict):
-                continue
-            options_raw = rule_value.get("options")
-            options = dict(options_raw) if isinstance(options_raw, dict) else {}
-            severity = rule_value.get("severity")
-            rules[rule_id] = RuleConfig(
-                enabled=rule_value.get("enabled", True) is not False,
-                severity=severity if isinstance(severity, Severity) else None,
-                options=MappingProxyType(options),
-            )
+    if not isinstance(rules_raw, dict):
+        return rules
+    for rule_id, rule_value in rules_raw.items():
+        if not isinstance(rule_value, dict):
+            continue
+        options_raw = rule_value.get("options")
+        options = dict(options_raw) if isinstance(options_raw, dict) else {}
+        severity = rule_value.get("severity")
+        rules[rule_id] = RuleConfig(
+            enabled=rule_value.get("enabled", True) is not False,
+            severity=severity if isinstance(severity, Severity) else None,
+            options=MappingProxyType(options),
+        )
+    return rules
 
+
+def _build_output(data: dict[str, object]) -> OutputConfig:
     output_raw = data.get("output")
     output_data = output_raw if isinstance(output_raw, dict) else {}
-    output = OutputConfig(
+    return OutputConfig(
         format=str(output_data.get("format", "terminal")),
         color=str(output_data.get("color", "auto")),
         output=str(output_data.get("output", "-")),
     )
 
+
+def _build_config(data: dict[str, object], source: str | None) -> Config:
     fail_on = data.get("fail_on")
     baseline = data.get("baseline")
     jobs = data.get("jobs")
@@ -360,8 +375,8 @@ def _build_config(data: dict[str, object], source: str | None) -> Config:
         fail_on=fail_on if isinstance(fail_on, Severity) else Severity.HIGH,
         baseline=baseline if isinstance(baseline, str) else None,
         jobs=jobs if isinstance(jobs, int) and not isinstance(jobs, bool) else 0,
-        output=output,
-        rules=MappingProxyType(rules),
+        output=_build_output(data),
+        rules=MappingProxyType(_build_rules(data)),
         source=source,
     )
 

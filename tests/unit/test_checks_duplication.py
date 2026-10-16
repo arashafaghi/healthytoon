@@ -10,7 +10,7 @@ from healthytoon.checks.duplication import DuplicationCheck
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, FileKind, Severity, Status
+from healthytoon.core.types import Category, FileKind, Finding, Severity, Status
 
 _RULE = "maintainability.duplication"
 
@@ -44,15 +44,7 @@ def test_duplication_declares_cross_file_python_metadata() -> None:
     assert check.default_severity is Severity.LOW
 
 
-def test_duplication_repeated_block_across_files_emits_one_finding(tmp_path: Path) -> None:
-    _write(tmp_path, "one.py", _block(12))
-    _write(tmp_path, "two.py", _block(12))
-
-    result = DuplicationCheck().run(_context(tmp_path))
-
-    assert result.status is Status.WARN
-    assert len(result.findings) == 1
-    finding = result.findings[0]
+def _assert_duplication_finding(finding: Finding) -> None:
     assert finding.rule_id == "HT-MAINT-005"
     assert finding.check == _RULE
     assert finding.category is Category.MAINTAINABILITY
@@ -65,6 +57,17 @@ def test_duplication_repeated_block_across_files_emits_one_finding(tmp_path: Pat
         "files": ["one.py", "two.py"],
     }
     assert finding.remediation is not None
+
+
+def test_duplication_repeated_block_across_files_emits_one_finding(tmp_path: Path) -> None:
+    _write(tmp_path, "one.py", _block(12))
+    _write(tmp_path, "two.py", _block(12))
+
+    result = DuplicationCheck().run(_context(tmp_path))
+
+    assert result.status is Status.WARN
+    assert len(result.findings) == 1
+    _assert_duplication_finding(result.findings[0])
 
 
 def test_duplication_below_min_tokens_emits_nothing(tmp_path: Path) -> None:

@@ -249,6 +249,63 @@ def _max_nesting_depth(
     return deepest
 
 
+def _nesting_finding(
+    check: NestingDepthCheck,
+    symbol: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    depth: int,
+    max_depth: int,
+    file: str,
+) -> Finding:
+    """Build the excessive-nesting finding for one function."""
+
+    end_line = node.end_lineno if node.end_lineno is not None else node.lineno
+    return Finding(
+        rule_id=check.rule_id,
+        check=check.id,
+        category=check.category,
+        severity=check.default_severity,
+        title="Excessive nesting",
+        message=f"{symbol} nests {depth} levels deep (max {max_depth})",
+        location=Location(file=file, line=node.lineno, end_line=end_line),
+        symbol=symbol,
+        properties={"depth": depth, "max": max_depth},
+        remediation=Remediation(
+            summary=f"Flatten {symbol}",
+            detail=(
+                "Replace deeply nested conditionals with guard clauses, "
+                "early returns, or extracted helper functions."
+            ),
+        ),
+    )
+
+
+def _file_nesting_findings(
+    check: NestingDepthCheck,
+    module: ast.Module,
+    file: str,
+    max_depth: int,
+    *,
+    count_comprehensions: bool,
+    count_lambdas: bool,
+) -> list[Finding]:
+    """Return the excessive-nesting findings for one parsed module."""
+
+    collector = _FunctionCollector()
+    collector.visit(module)
+    findings: list[Finding] = []
+    for symbol, node in _disambiguate_functions(collector.functions):
+        depth = _max_nesting_depth(
+            node,
+            0,
+            count_comprehensions=count_comprehensions,
+            count_lambdas=count_lambdas,
+        )
+        if depth > max_depth:
+            findings.append(_nesting_finding(check, symbol, node, depth, max_depth, file))
+    return findings
+
+
 class FunctionLengthCheck:
     """Flag functions longer than a configurable number of source lines."""
 
@@ -341,39 +398,16 @@ class NestingDepthCheck:
             module = ctx.parse_ast(path)
             if module is None:
                 continue
-            file = _relative_posix(path, ctx.root)
-            collector = _FunctionCollector()
-            collector.visit(module)
-            for symbol, node in _disambiguate_functions(collector.functions):
-                depth = _max_nesting_depth(
-                    node,
-                    0,
+            findings.extend(
+                _file_nesting_findings(
+                    self,
+                    module,
+                    _relative_posix(path, ctx.root),
+                    max_depth,
                     count_comprehensions=count_comprehensions,
                     count_lambdas=count_lambdas,
                 )
-                if depth <= max_depth:
-                    continue
-                end_line = node.end_lineno if node.end_lineno is not None else node.lineno
-                findings.append(
-                    Finding(
-                        rule_id=self.rule_id,
-                        check=self.id,
-                        category=self.category,
-                        severity=self.default_severity,
-                        title="Excessive nesting",
-                        message=f"{symbol} nests {depth} levels deep (max {max_depth})",
-                        location=Location(file=file, line=node.lineno, end_line=end_line),
-                        symbol=symbol,
-                        properties={"depth": depth, "max": max_depth},
-                        remediation=Remediation(
-                            summary=f"Flatten {symbol}",
-                            detail=(
-                                "Replace deeply nested conditionals with guard clauses, "
-                                "early returns, or extracted helper functions."
-                            ),
-                        ),
-                    )
-                )
+            )
         return _result(self.id, findings)
 
 

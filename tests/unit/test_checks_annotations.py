@@ -10,7 +10,7 @@ from healthytoon.checks.annotations import AnnotationCoverageCheck
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, Severity, Status
+from healthytoon.core.types import Category, Finding, Severity, Status
 
 _RULE = "typing.annotation_coverage"
 
@@ -26,6 +26,17 @@ def _context(tmp_path: Path, rules: Mapping[str, RuleConfig] | None = None) -> C
     if rules is not None:
         config = dataclasses.replace(config, rules=dict(rules))
     return CheckContext.from_config(tmp_path, config)
+
+
+def _assert_coverage_finding(finding: Finding) -> None:
+    assert finding.rule_id == "HT-TYPE-001"
+    assert finding.check == _RULE
+    assert finding.category is Category.TYPING
+    assert finding.severity is Severity.LOW
+    assert finding.symbol == "<module>"
+    assert finding.location is not None
+    assert finding.location.file == "coverage.py"
+    assert finding.location.line == 1
 
 
 def test_annotation_coverage_violation_emits_expected_finding(tmp_path: Path) -> None:
@@ -55,14 +66,7 @@ def five(x):
     assert result.status is Status.WARN
     assert len(result.findings) == 1
     finding = result.findings[0]
-    assert finding.rule_id == "HT-TYPE-001"
-    assert finding.check == _RULE
-    assert finding.category is Category.TYPING
-    assert finding.severity is Severity.LOW
-    assert finding.symbol == "<module>"
-    assert finding.location is not None
-    assert finding.location.file == "coverage.py"
-    assert finding.location.line == 1
+    _assert_coverage_finding(finding)
     assert dict(finding.properties) == {"annotated": 3, "total": 5, "min_ratio": 0.8}
     assert finding.message == "only 3/5 public functions are annotated (min 80%)"
 

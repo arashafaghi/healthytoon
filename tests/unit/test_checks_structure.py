@@ -16,7 +16,7 @@ from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
 from healthytoon.core.runner import run_checks
-from healthytoon.core.types import Category, Severity, Status, ToolInfo
+from healthytoon.core.types import Category, Finding, Severity, Status, ToolInfo
 
 _MAX_LENGTH_RULE = "maintainability.function_length"
 _MAX_DEPTH_RULE = "maintainability.nesting_depth"
@@ -43,6 +43,32 @@ def _long_function(lines: int = 60, name: str = "long_function") -> str:
     return f"def {name}():\n{body}\n    return value_0\n"
 
 
+def _assert_finding_fields(
+    finding: Finding,
+    *,
+    rule_id: str,
+    check: str,
+    category: Category,
+    severity: Severity,
+    symbol: str,
+    file: str,
+    line: int,
+) -> None:
+    assert finding.rule_id == rule_id
+    assert finding.check == check
+    assert finding.category is category
+    assert finding.severity is severity
+    assert finding.symbol == symbol
+    assert finding.location is not None
+    assert finding.location.file == file
+    assert finding.location.line == line
+
+
+def _assert_end_line(finding: Finding, end_line: int) -> None:
+    assert finding.location is not None
+    assert finding.location.end_line == end_line
+
+
 # --- FunctionLengthCheck ----------------------------------------------------
 
 
@@ -54,15 +80,17 @@ def test_function_length_violation_emits_expected_finding(tmp_path: Path) -> Non
     assert result.status is Status.WARN
     assert len(result.findings) == 1
     finding = result.findings[0]
-    assert finding.rule_id == "HT-MAINT-001"
-    assert finding.check == _MAX_LENGTH_RULE
-    assert finding.category is Category.MAINTAINABILITY
-    assert finding.severity is Severity.MEDIUM
-    assert finding.symbol == "long_function"
-    assert finding.location is not None
-    assert finding.location.file == "long.py"
-    assert finding.location.line == 1
-    assert finding.location.end_line == 60
+    _assert_finding_fields(
+        finding,
+        rule_id="HT-MAINT-001",
+        check=_MAX_LENGTH_RULE,
+        category=Category.MAINTAINABILITY,
+        severity=Severity.MEDIUM,
+        symbol="long_function",
+        file="long.py",
+        line=1,
+    )
+    _assert_end_line(finding, 60)
     assert dict(finding.properties) == {"length": 60, "max": 50}
     assert finding.remediation is not None
 
@@ -154,14 +182,16 @@ def test_nesting_depth_violation_emits_expected_finding(tmp_path: Path) -> None:
     assert result.status is Status.WARN
     assert len(result.findings) == 1
     finding = result.findings[0]
-    assert finding.rule_id == "HT-MAINT-002"
-    assert finding.check == _MAX_DEPTH_RULE
-    assert finding.category is Category.MAINTAINABILITY
-    assert finding.severity is Severity.MEDIUM
-    assert finding.symbol == "deep"
-    assert finding.location is not None
-    assert finding.location.file == "deep.py"
-    assert finding.location.line == 1
+    _assert_finding_fields(
+        finding,
+        rule_id="HT-MAINT-002",
+        check=_MAX_DEPTH_RULE,
+        category=Category.MAINTAINABILITY,
+        severity=Severity.MEDIUM,
+        symbol="deep",
+        file="deep.py",
+        line=1,
+    )
     assert dict(finding.properties) == {"depth": 6, "max": 5}
 
 
@@ -285,14 +315,16 @@ def test_module_length_violation_emits_one_finding(tmp_path: Path) -> None:
     assert result.status is Status.WARN
     assert len(result.findings) == 1
     finding = result.findings[0]
-    assert finding.rule_id == "HT-MAINT-003"
-    assert finding.check == _MAX_LINES_RULE
-    assert finding.category is Category.MAINTAINABILITY
-    assert finding.severity is Severity.LOW
-    assert finding.symbol == "<module>"
-    assert finding.location is not None
-    assert finding.location.file == "big.py"
-    assert finding.location.line == 1
+    _assert_finding_fields(
+        finding,
+        rule_id="HT-MAINT-003",
+        check=_MAX_LINES_RULE,
+        category=Category.MAINTAINABILITY,
+        severity=Severity.LOW,
+        symbol="<module>",
+        file="big.py",
+        line=1,
+    )
     assert dict(finding.properties) == {"lines": 1001, "max": 1000}
 
 

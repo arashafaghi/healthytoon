@@ -62,22 +62,26 @@ def test_builtin_checks_are_stable_across_registry_calls() -> None:
     assert from_registry == _EXPECTED_IDS
 
 
+def _assert_builtin_check_contract(check: Check) -> None:
+    assert isinstance(check, Check)
+    assert check.api_version == CHECK_API_VERSION
+    assert isinstance(check.cross_file, bool)
+    assert isinstance(check.default_severity, Severity)
+    if check.id in _CI_IDS:
+        assert check.file_kinds == frozenset()
+        assert check.category in (Category.CI_CD, Category.SECURITY)
+    else:
+        assert check.file_kinds == frozenset({FileKind.PYTHON})
+        assert check.category in (
+            Category.MAINTAINABILITY,
+            Category.TYPING,
+            Category.DOCUMENTATION,
+        )
+
+
 def test_builtin_checks_satisfy_the_check_protocol() -> None:
     for check in registry.builtin_checks():
-        assert isinstance(check, Check)
-        assert check.api_version == CHECK_API_VERSION
-        assert isinstance(check.cross_file, bool)
-        assert isinstance(check.default_severity, Severity)
-        if check.id in _CI_IDS:
-            assert check.file_kinds == frozenset()
-            assert check.category in (Category.CI_CD, Category.SECURITY)
-        else:
-            assert check.file_kinds == frozenset({FileKind.PYTHON})
-            assert check.category in (
-                Category.MAINTAINABILITY,
-                Category.TYPING,
-                Category.DOCUMENTATION,
-            )
+        _assert_builtin_check_contract(check)
 
 
 def test_structural_ast_checks_are_single_file() -> None:

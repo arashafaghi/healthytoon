@@ -9,7 +9,7 @@ when at least two current minor versions are exercised.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from healthytoon.cicd.checks_p0 import BaseCICheck, _finding
@@ -29,6 +29,9 @@ __all__ = [
 
 #: ``major.minor`` prefix of a version label.
 _CYCLE_RE = re.compile(r"^(\d+)\.(\d+)")
+
+#: A single PEP 440 comparison clause: operator plus version.
+_CONSTRAINT_RE = re.compile(r"(===|==|!=|>=|<=|~=|>|<)\s*(\S+)")
 
 #: A dependency install command that can be frozen.
 _INSTALL_RE = re.compile(
@@ -202,39 +205,65 @@ def _satisfies(version: str, specifier: str) -> bool:
     candidate = _parse_version(version)
     for raw in specifier.split(","):
         constraint = raw.strip()
-        if not constraint:
-            continue
-        match = re.match(r"(===|==|!=|>=|<=|~=|>|<)\s*(\S+)", constraint)
-        if match is None:
-            continue
-        operator, target = match.group(1), match.group(2)
-        if operator in ("==", "===") and target.endswith(".*"):
-            base = _parse_version(target[:-2])
-            if candidate[: len(base)] != base:
-                return False
-            continue
-        bound = _parse_version(target)
-        comparison = _compare(candidate, bound)
-        if operator == ">=" and comparison < 0:
+        if constraint and not _satisfies_constraint(candidate, constraint):
             return False
-        if operator == ">" and comparison <= 0:
-            return False
-        if operator == "<=" and comparison > 0:
-            return False
-        if operator == "<" and comparison >= 0:
-            return False
-        if operator in ("==", "===") and comparison != 0:
-            return False
-        if operator == "!=" and comparison == 0:
-            return False
-        if operator == "~=":
-            if comparison < 0:
-                return False
-            upper: tuple[int, ...] = (
-                (bound[0] + 1, 0) if len(bound) <= 2 else (*bound[:-2], bound[-2] + 1)
-            )
-            if _compare(candidate, upper) >= 0:
-                return False
+    return True
+
+
+def _satisfies_constraint(candidate: tuple[int, ...], constraint: str) -> bool:
+    """Return whether ``candidate`` satisfies one ``operator + version`` clause."""
+
+    match = _CONSTRAINT_RE.match(constraint)
+    if match is None:
+        return True
+    operator, target = match.group(1), match.group(2)
+    if operator in ("==", "===") and target.endswith(".*"):
+        return _matches_wildcard(candidate, target)
+    bound = _parse_version(target)
+    if operator == "~=":
+        return _matches_compatible(candidate, bound)
+    return _matches_comparator(candidate, bound, operator)
+
+
+def _matches_wildcard(candidate: tuple[int, ...], target: str) -> bool:
+    """True when ``candidate`` matches a ``==X.Y.*`` style prefix constraint."""
+
+    base = _parse_version(target[:-2])
+    return candidate[: len(base)] == base
+
+
+def _matches_compatible(candidate: tuple[int, ...], bound: tuple[int, ...]) -> bool:
+    """True when ``candidate`` satisfies a ``~=`` compatible-release bound."""
+
+    if _compare(candidate, bound) < 0:
+        return False
+    return _compare(candidate, _compatible_upper(bound)) < 0
+
+
+def _compatible_upper(bound: tuple[int, ...]) -> tuple[int, ...]:
+    """Return the exclusive upper bound implied by a ``~=`` release."""
+
+    if len(bound) <= 2:
+        return (bound[0] + 1, 0)
+    return (*bound[:-2], bound[-2] + 1)
+
+
+def _matches_comparator(candidate: tuple[int, ...], bound: tuple[int, ...], operator: str) -> bool:
+    """True when a simple comparison operator holds for ``candidate``."""
+
+    comparison = _compare(candidate, bound)
+    if operator == ">=":
+        return comparison >= 0
+    if operator == ">":
+        return comparison > 0
+    if operator == "<=":
+        return comparison <= 0
+    if operator == "<":
+        return comparison < 0
+    if operator in ("==", "==="):
+        return comparison == 0
+    if operator == "!=":
+        return comparison != 0
     return True
 
 
@@ -391,25 +420,37 @@ def _is_local_install(command: str) -> bool:
         return True
     tokens = command.split()
     for index, token in enumerate(tokens):
-        if token != "install":
-            continue
-        skip_next = False
-        for argument in tokens[index + 1 :]:
-            if skip_next:
-                skip_next = False
-                continue
-            if argument in _PIP_VALUE_FLAGS:
-                skip_next = True
-                continue
-            if argument.startswith("-"):
-                continue
-            if (
-                argument.endswith(".whl")
-                or argument == "."
-                or argument.startswith(("./", "../", "/"))
-            ):
-                return True
+        if token == "install" and _has_local_target(tokens[index + 1 :]):
+            return True
     return False
+
+
+def _has_local_target(arguments: Sequence[str]) -> bool:
+    """True when any ``pip install`` argument names a local artifact.
+
+    Flags whose value is a separate token (``-r ./reqs.txt``) are skipped so
+    their value is not mistaken for an install target.
+    """
+
+    skip_next = False
+    for argument in arguments:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument in _PIP_VALUE_FLAGS:
+            skip_next = True
+            continue
+        if argument.startswith("-"):
+            continue
+        if _is_local_artifact(argument):
+            return True
+    return False
+
+
+def _is_local_artifact(argument: str) -> bool:
+    """True for a wheel path, ``.``, or a relative/absolute path argument."""
+
+    return argument.endswith(".whl") or argument == "." or argument.startswith(("./", "../", "/"))
 
 
 class DependencyUpdatesCheck(BaseCICheck):

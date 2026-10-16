@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.metadata
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 
@@ -44,18 +43,6 @@ class FakeEntryPoint:
 
     def load(self) -> object:
         return self._loader()
-
-
-class LegacyEntryPoints:
-    """Stand-in for the pre-3.12 dict-like collection with ``.get(group=...)``."""
-
-    def __init__(self, points: tuple[FakeEntryPoint, ...]) -> None:
-        self._points = points
-
-    def get(self, group: str | None = None, default: Any = None) -> Any:
-        if group == registry.CHECK_ENTRY_POINT_GROUP:
-            return self._points
-        return default
 
 
 def _patch_entry_points(monkeypatch: pytest.MonkeyPatch, points: object) -> None:
@@ -186,19 +173,6 @@ def test_builtin_only_lookup_skips_plugins(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert tuple(registry.all_checks(with_plugins=False)) == _BUILTIN_IDS
     assert registry.get_check("plugin.only", with_plugins=False) is None
-
-
-def test_legacy_get_api_is_supported(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected = FakeCheck("plugin.legacy")
-
-    def legacy_entry_points(**kwargs: object) -> object:
-        if kwargs:
-            raise TypeError("entry_points() takes no arguments")
-        return LegacyEntryPoints((FakeEntryPoint(lambda: expected),))
-
-    monkeypatch.setattr(importlib.metadata, "entry_points", legacy_entry_points)
-
-    assert registry.plugin_checks() == (expected,)
 
 
 def test_broken_entry_point_metadata_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:

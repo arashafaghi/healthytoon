@@ -167,6 +167,147 @@ def _clone_signature(occurrences: Sequence[_Occurrence]) -> str:
     return ";".join(f"{file}:{start}" for file, start in sorted(occurrences))
 
 
+#: A maximal clone: token length, its occurrences, and merged per-file spans.
+_Candidate = tuple[int, list[_Occurrence], list[tuple[str, int, int]]]
+
+
+def _duplication_options(ctx: CheckContext, check_id: str) -> tuple[int, int, int]:
+    """Read and bound the ``(min_tokens, min_occurrences, max_findings)`` options."""
+
+    options = ctx.rule_options(
+        check_id,
+        {
+            "min_tokens": _DEFAULT_MIN_TOKENS,
+            "min_occurrences": _DEFAULT_MIN_OCCURRENCES,
+            "max_findings": _MAX_FINDINGS,
+        },
+    )
+    min_tokens = max(1, _int_option(options, "min_tokens", _DEFAULT_MIN_TOKENS))
+    min_occurrences = max(2, _int_option(options, "min_occurrences", _DEFAULT_MIN_OCCURRENCES))
+    max_findings = max(1, _int_option(options, "max_findings", _MAX_FINDINGS))
+    return min_tokens, min_occurrences, max_findings
+
+
+def _collect_files(
+    ctx: CheckContext, file_kinds: frozenset[FileKind], min_tokens: int
+) -> dict[str, list[_Token]]:
+    """Tokenize every Python file long enough to contain a candidate clone."""
+
+    files: dict[str, list[_Token]] = {}
+    for path in sorted(ctx.files_for(file_kinds)):
+        tokens = _tokenize_file(ctx.read_text(path))
+        if tokens is None or len(tokens) < min_tokens:
+            continue
+        files[_relative_posix(path, ctx.root)] = tokens
+    return files
+
+
+def _window_groups(
+    files: Mapping[str, Sequence[_Token]], min_tokens: int
+) -> dict[tuple[str, ...], list[_Occurrence]]:
+    """Group every sliding window of ``min_tokens`` by its normalized content."""
+
+    groups: dict[tuple[str, ...], list[_Occurrence]] = {}
+    for file, tokens in files.items():
+        keys = [token[0] for token in tokens]
+        for start in range(len(keys) - min_tokens + 1):
+            window = tuple(keys[start : start + min_tokens])
+            groups.setdefault(window, []).append((file, start))
+    return groups
+
+
+def _merged_spans(
+    occurrences: Sequence[_Occurrence],
+    files: Mapping[str, Sequence[_Token]],
+    length: int,
+    min_occurrences: int,
+) -> list[tuple[str, int, int]] | None:
+    """Merge each file's occurrences into spans, or ``None`` when too few remain."""
+
+    by_file: dict[str, list[int]] = {}
+    for file, start in occurrences:
+        by_file.setdefault(file, []).append(start)
+    merged: list[tuple[str, int, int]] = []
+    for file, starts in by_file.items():
+        for begin, end in _merge_intervals(starts, length):
+            merged.append((file, begin, end))
+    return merged if len(merged) >= min_occurrences else None
+
+
+def _candidate_clones(
+    groups: Mapping[tuple[str, ...], list[_Occurrence]],
+    files: Mapping[str, Sequence[_Token]],
+    min_tokens: int,
+    min_occurrences: int,
+) -> list[_Candidate]:
+    """Extend recurring windows to maximal clones with merged spans."""
+
+    candidates: list[_Candidate] = []
+    for occurrences in groups.values():
+        if len(occurrences) < min_occurrences:
+            continue
+        length = _extend_clone(files, occurrences, min_tokens)
+        merged = _merged_spans(occurrences, files, length, min_occurrences)
+        if merged is None:
+            continue
+        candidates.append((length, list(occurrences), merged))
+    return candidates
+
+
+def _select_eligible(candidates: Sequence[_Candidate]) -> list[_Candidate]:
+    """Drop candidates fully covered by a longer clone already accepted."""
+
+    eligible: list[_Candidate] = []
+    coverage: dict[str, list[tuple[int, int]]] = {}
+    for candidate in candidates:
+        _, _, merged = candidate
+        if all(_covered(coverage.get(file, ()), begin, end) for file, begin, end in merged):
+            continue
+        eligible.append(candidate)
+        for file, begin, end in merged:
+            coverage.setdefault(file, []).append((begin, end))
+    return eligible
+
+
+def _duplication_finding(
+    check: DuplicationCheck,
+    candidate: _Candidate,
+    files: Mapping[str, Sequence[_Token]],
+) -> Finding:
+    """Build the finding for one accepted clone candidate."""
+
+    length, occurrences, merged = candidate
+    first_file, first_start = min(occurrences)
+    line = files[first_file][first_start][1]
+    files_involved = sorted({file for file, _, _ in merged})
+    count = len(merged)
+    return Finding(
+        rule_id=check.rule_id,
+        check=check.id,
+        category=check.category,
+        severity=check.default_severity,
+        title="Duplicated code",
+        message=(
+            f"{length} tokens duplicated across {count} locations in {len(files_involved)} file(s)"
+        ),
+        location=Location(file=first_file, line=line),
+        symbol=f"{first_file}:{line}:{length}",
+        properties={
+            "tokens": length,
+            "occurrences": count,
+            "files": files_involved,
+        },
+        remediation=Remediation(
+            summary="Extract the duplicated block into a shared unit",
+            detail=(
+                "Factor the repeated token sequence into a function or "
+                "module and call it from each site so the logic has a "
+                "single owner."
+            ),
+        ),
+    )
+
+
 class DuplicationCheck:
     """Flag token sequences repeated across or within Python files."""
 
@@ -186,65 +327,14 @@ class DuplicationCheck:
     def run(self, ctx: CheckContext) -> CheckResult:
         """Emit one finding per maximal duplicated token block."""
 
-        options = ctx.rule_options(
-            self.id,
-            {
-                "min_tokens": _DEFAULT_MIN_TOKENS,
-                "min_occurrences": _DEFAULT_MIN_OCCURRENCES,
-                "max_findings": _MAX_FINDINGS,
-            },
-        )
-        min_tokens = max(1, _int_option(options, "min_tokens", _DEFAULT_MIN_TOKENS))
-        min_occurrences = max(2, _int_option(options, "min_occurrences", _DEFAULT_MIN_OCCURRENCES))
-        max_findings = max(1, _int_option(options, "max_findings", _MAX_FINDINGS))
+        min_tokens, min_occurrences, max_findings = _duplication_options(ctx, self.id)
 
-        files: dict[str, list[_Token]] = {}
-        for path in sorted(ctx.files_for(self.file_kinds)):
-            tokens = _tokenize_file(ctx.read_text(path))
-            if tokens is None or len(tokens) < min_tokens:
-                continue
-            files[_relative_posix(path, ctx.root)] = tokens
+        files = _collect_files(ctx, self.file_kinds, min_tokens)
+        groups = _window_groups(files, min_tokens)
+        candidates = _candidate_clones(groups, files, min_tokens, min_occurrences)
+        candidates.sort(key=lambda candidate: (-candidate[0], _clone_signature(candidate[1])))
 
-        groups: dict[tuple[str, ...], list[_Occurrence]] = {}
-        for file, tokens in files.items():
-            keys = [token[0] for token in tokens]
-            for start in range(len(keys) - min_tokens + 1):
-                window = tuple(keys[start : start + min_tokens])
-                groups.setdefault(window, []).append((file, start))
-
-        candidates: list[tuple[int, list[_Occurrence], list[tuple[str, int, int]]]] = []
-        for occurrences in groups.values():
-            if len(occurrences) < min_occurrences:
-                continue
-            length = _extend_clone(files, occurrences, min_tokens)
-            merged: list[tuple[str, int, int]] = []
-            by_file: dict[str, list[int]] = {}
-            for file, start in occurrences:
-                by_file.setdefault(file, []).append(start)
-            for file, starts in by_file.items():
-                for begin, end in _merge_intervals(starts, length):
-                    merged.append((file, begin, end))
-            if len(merged) < min_occurrences:
-                continue
-            candidates.append((length, list(occurrences), merged))
-
-        candidates.sort(
-            key=lambda candidate: (
-                -candidate[0],
-                _clone_signature(candidate[1]),
-            )
-        )
-
-        eligible: list[tuple[int, list[_Occurrence], list[tuple[str, int, int]]]] = []
-        coverage: dict[str, list[tuple[int, int]]] = {}
-        for candidate in candidates:
-            _, occurrences, merged = candidate
-            if all(_covered(coverage.get(file, ()), begin, end) for file, begin, end in merged):
-                continue
-            eligible.append(candidate)
-            for file, begin, end in merged:
-                coverage.setdefault(file, []).append((begin, end))
-
+        eligible = _select_eligible(candidates)
         accepted = eligible[:max_findings]
         notes = (
             f"duplication findings truncated to {max_findings} of {len(eligible)} groups"
@@ -252,41 +342,6 @@ class DuplicationCheck:
             else None
         )
 
-        findings: list[Finding] = []
-        for length, occurrences, merged in accepted:
-            first_file, first_start = min(occurrences)
-            line = files[first_file][first_start][1]
-            files_involved = sorted({file for file, _, _ in merged})
-            count = len(merged)
-            symbol = f"{first_file}:{line}:{length}"
-            findings.append(
-                Finding(
-                    rule_id=self.rule_id,
-                    check=self.id,
-                    category=self.category,
-                    severity=self.default_severity,
-                    title="Duplicated code",
-                    message=(
-                        f"{length} tokens duplicated across {count} locations "
-                        f"in {len(files_involved)} file(s)"
-                    ),
-                    location=Location(file=first_file, line=line),
-                    symbol=symbol,
-                    properties={
-                        "tokens": length,
-                        "occurrences": count,
-                        "files": files_involved,
-                    },
-                    remediation=Remediation(
-                        summary="Extract the duplicated block into a shared unit",
-                        detail=(
-                            "Factor the repeated token sequence into a function or "
-                            "module and call it from each site so the logic has a "
-                            "single owner."
-                        ),
-                    ),
-                )
-            )
-
+        findings = [_duplication_finding(self, candidate, files) for candidate in accepted]
         findings.sort(key=lambda finding: finding.location.file if finding.location else "")
         return _result(self.id, findings, notes=notes)

@@ -16,6 +16,7 @@ from healthytoon.core.types import (
     FileKind,
     Finding,
     Location,
+    Report,
     Severity,
     Status,
     ToolInfo,
@@ -109,6 +110,34 @@ def _ctx_with_files(tmp_path: Path, *names: str) -> CheckContext:
     )
 
 
+def _outcomes_by_check(report: Report) -> dict[str, CheckOutcome]:
+    return {outcome.check: outcome for outcome in report.outcomes}
+
+
+def _assert_computed_fingerprint(finding: Finding, *, file: str, symbol: str | None) -> None:
+    assert finding.fingerprint == compute_fingerprint(
+        rule_id=finding.rule_id, file=file, symbol=symbol
+    )
+
+
+def _assert_summary_counts(report: Report) -> None:
+    assert dict(report.summary.by_severity) == {Severity.LOW: 1, Severity.HIGH: 1}
+    assert dict(report.summary.by_category) == {Category.MAINTAINABILITY: 1, Category.SECURITY: 1}
+
+
+def _assert_target(report: Report, ctx: CheckContext) -> None:
+    assert report.target.checks_run == ("fake.a", "fake.b")
+    assert report.target.path == str(ctx.root)
+    assert report.target.files_scanned == 0
+    assert report.generated_at is None
+
+
+def _assert_broken_outcome(outcome: CheckOutcome) -> None:
+    assert outcome.status is Status.ERROR
+    assert outcome.message == "RuntimeError: kaboom"
+    assert outcome.findings == 0
+
+
 def test_findings_aggregated_and_fingerprints_filled(ctx: CheckContext) -> None:
     first = _finding("HT-A-001", check="fake.a", file="pkg/a.py", symbol="thing", message="msg a")
     second = _finding(
@@ -128,19 +157,11 @@ def test_findings_aggregated_and_fingerprints_filled(ctx: CheckContext) -> None:
     assert len(report.findings) == 2
     assert report.summary.total == 2
     assert report.findings[0].rule_id == "HT-A-001"
-    assert report.findings[0].fingerprint == compute_fingerprint(
-        rule_id="HT-A-001", file="pkg/a.py", symbol="thing"
-    )
+    _assert_computed_fingerprint(report.findings[0], file="pkg/a.py", symbol="thing")
     assert report.findings[1].rule_id == "HT-B-001"
-    assert report.findings[1].fingerprint == compute_fingerprint(
-        rule_id="HT-B-001", file="pkg/b.py", symbol=None
-    )
-    assert dict(report.summary.by_severity) == {Severity.LOW: 1, Severity.HIGH: 1}
-    assert dict(report.summary.by_category) == {Category.MAINTAINABILITY: 1, Category.SECURITY: 1}
-    assert report.target.checks_run == ("fake.a", "fake.b")
-    assert report.target.path == str(ctx.root)
-    assert report.target.files_scanned == 0
-    assert report.generated_at is None
+    _assert_computed_fingerprint(report.findings[1], file="pkg/b.py", symbol=None)
+    _assert_summary_counts(report)
+    _assert_target(report, ctx)
 
 
 def test_duplicate_fingerprints_collapsed(ctx: CheckContext) -> None:
@@ -189,10 +210,8 @@ def test_raising_check_yields_error_outcome_without_finding(ctx: CheckContext) -
     assert len(report.findings) == 1
     assert report.findings[0].rule_id == "HT-H-001"
     assert report.summary.total == 1
-    outcomes = {outcome.check: outcome for outcome in report.outcomes}
-    assert outcomes["broken"].status is Status.ERROR
-    assert outcomes["broken"].message == "RuntimeError: kaboom"
-    assert outcomes["broken"].findings == 0
+    outcomes = _outcomes_by_check(report)
+    _assert_broken_outcome(outcomes["broken"])
     assert outcomes["healthy"].status is Status.PASS
     assert report.analysis_incomplete is True
     assert report.target.checks_run == ("broken", "healthy")

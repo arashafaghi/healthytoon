@@ -67,7 +67,10 @@ def test_parse_representative_circleci_config(tmp_path: Path) -> None:
     jobs = {job.id: job for job in pipeline.jobs}
     assert set(jobs) == {"lint", "test"}
 
-    test_job = jobs["test"]
+
+def test_parse_representative_circleci_test_job(tmp_path: Path) -> None:
+    test_job = {job.id: job for job in _parse(tmp_path).jobs}["test"]
+
     assert test_job.pointer == "/jobs/test"
     assert test_job.runs_on == ("cimg/python:3.12",)
     assert any(step.run == "pytest -q" for step in test_job.steps)

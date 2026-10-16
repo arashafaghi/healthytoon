@@ -73,6 +73,34 @@ def _red(token: str, *, color: bool) -> str:
     return f"{_RED}{token}{_RESET}"
 
 
+def _count_status(outcomes: tuple[CheckOutcome, ...], status: Status) -> int:
+    """Return how many outcomes have ``status``."""
+
+    return sum(1 for outcome in outcomes if outcome.status is status)
+
+
+def _count_ran(outcomes: tuple[CheckOutcome, ...]) -> int:
+    """Return how many outcomes actually ran (passed, warned, or failed)."""
+
+    return sum(1 for outcome in outcomes if outcome.status in _RAN_STATUSES)
+
+
+def _error_line(outcome: CheckOutcome, *, color: bool) -> str:
+    """Format one errored-check line, collapsing whitespace in its message."""
+
+    flat = " ".join(outcome.message.split()) if outcome.message else ""
+    detail = f": {flat}" if flat else ""
+    return f"{_red('error:', color=color)} {outcome.check}{detail}"
+
+
+def _error_lines(outcomes: tuple[CheckOutcome, ...], *, color: bool) -> list[str]:
+    """Format one line per errored check, preserving outcome order."""
+
+    return [
+        _error_line(outcome, color=color) for outcome in outcomes if outcome.status is Status.ERROR
+    ]
+
+
 def _checks_lines(outcomes: tuple[CheckOutcome, ...], *, color: bool) -> list[str]:
     """Compact run accounting plus one visible line per errored check.
 
@@ -80,19 +108,13 @@ def _checks_lines(outcomes: tuple[CheckOutcome, ...], *, color: bool) -> list[st
     check must never render as an all-green report.
     """
 
-    skipped = sum(1 for outcome in outcomes if outcome.status is Status.SKIP)
-    errored = sum(1 for outcome in outcomes if outcome.status is Status.ERROR)
+    skipped = _count_status(outcomes, Status.SKIP)
+    errored = _count_status(outcomes, Status.ERROR)
     if skipped == 0 and errored == 0:
         return []
-    ran = sum(1 for outcome in outcomes if outcome.status in _RAN_STATUSES)
-    lines = [f"checks: {ran} ran, {skipped} skipped, {errored} {_red('errored', color=color)}"]
-    for outcome in outcomes:
-        if outcome.status is not Status.ERROR:
-            continue
-        flat = " ".join(outcome.message.split()) if outcome.message else ""
-        detail = f": {flat}" if flat else ""
-        lines.append(f"{_red('error:', color=color)} {outcome.check}{detail}")
-    return lines
+    ran = _count_ran(outcomes)
+    summary = f"checks: {ran} ran, {skipped} skipped, {errored} {_red('errored', color=color)}"
+    return [summary, *_error_lines(outcomes, color=color)]
 
 
 class TerminalReporter:

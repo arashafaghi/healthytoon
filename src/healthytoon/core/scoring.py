@@ -73,31 +73,43 @@ def build_score(
     """
 
     active_weights = weights if weights is not None else DEFAULT_WEIGHTS
+    by_category = _group_by_category(findings)
+    category_scores = [
+        _category_score(category, by_category.get(category, []), active_weights)
+        for category in Category
+    ]
+    overall = _overall_score(category_scores, findings)
+    return Score(overall=overall, grade=grade_for(overall), by_category=tuple(category_scores))
 
+
+def _group_by_category(findings: Sequence[Finding]) -> dict[Category, list[Finding]]:
     by_category: dict[Category, list[Finding]] = {}
     for finding in findings:
         by_category.setdefault(finding.category, []).append(finding)
+    return by_category
 
-    category_scores: list[CategoryScore] = []
-    for category in Category:
-        items = by_category.get(category, [])
-        if items:
-            penalty = sum(
-                SEVERITY_PENALTY.get(finding.severity, 0.0) * _confidence(finding)
-                for finding in items
-            )
-            score = round(_clamp(100.0 - penalty), 2)
-        else:
-            score = 100.0
-        category_scores.append(
-            CategoryScore(
-                category=category,
-                score=score,
-                weight=float(active_weights.get(category, 0.0)),
-                findings=len(items),
-            )
+
+def _category_score(
+    category: Category,
+    items: Sequence[Finding],
+    weights: Mapping[Category, float],
+) -> CategoryScore:
+    if items:
+        penalty = sum(
+            SEVERITY_PENALTY.get(finding.severity, 0.0) * _confidence(finding) for finding in items
         )
+        score = round(_clamp(100.0 - penalty), 2)
+    else:
+        score = 100.0
+    return CategoryScore(
+        category=category,
+        score=score,
+        weight=float(weights.get(category, 0.0)),
+        findings=len(items),
+    )
 
+
+def _overall_score(category_scores: Sequence[CategoryScore], findings: Sequence[Finding]) -> float:
     weighted = [(entry.weight, entry.score) for entry in category_scores if entry.weight > 0]
     if weighted:
         total_weight = sum(weight for weight, _ in weighted)
@@ -108,9 +120,7 @@ def build_score(
     overall = _clamp(overall)
     if any(finding.severity is Severity.CRITICAL for finding in findings):
         overall = min(overall, _CRITICAL_CAP)
-    overall = round(overall, 2)
-
-    return Score(overall=overall, grade=grade_for(overall), by_category=tuple(category_scores))
+    return round(overall, 2)
 
 
 def _confidence(finding: Finding) -> float:

@@ -13,7 +13,7 @@ from healthytoon.checks.complexity import ComplexityCheck
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, FileKind, Severity, Status
+from healthytoon.core.types import Category, FileKind, Finding, Severity, Status
 
 _RULE = "maintainability.complexity"
 
@@ -52,15 +52,7 @@ def test_complexity_declares_single_file_python_metadata() -> None:
     assert check.file_kinds == frozenset({FileKind.PYTHON})
 
 
-def test_complexity_real_radon_flags_a_high_complexity_function(tmp_path: Path) -> None:
-    _write(tmp_path, "tangled.py", _HIGH_COMPLEXITY)
-
-    result = ComplexityCheck().run(_context(tmp_path))
-
-    assert result.status is Status.WARN
-    findings = [finding for finding in result.findings if finding.rule_id == "HT-MAINT-006"]
-    assert len(findings) == 1
-    finding = findings[0]
+def _assert_tangled_finding(finding: Finding) -> None:
     assert finding.check == _RULE
     assert finding.location is not None
     assert finding.location.file == "tangled.py"
@@ -69,6 +61,17 @@ def test_complexity_real_radon_flags_a_high_complexity_function(tmp_path: Path) 
     assert finding.properties["complexity"] > 10
     assert finding.properties["max"] == 10
     assert finding.remediation is not None
+
+
+def test_complexity_real_radon_flags_a_high_complexity_function(tmp_path: Path) -> None:
+    _write(tmp_path, "tangled.py", _HIGH_COMPLEXITY)
+
+    result = ComplexityCheck().run(_context(tmp_path))
+
+    assert result.status is Status.WARN
+    findings = [finding for finding in result.findings if finding.rule_id == "HT-MAINT-006"]
+    assert len(findings) == 1
+    _assert_tangled_finding(findings[0])
 
 
 def test_complexity_simple_function_produces_no_findings(tmp_path: Path) -> None:

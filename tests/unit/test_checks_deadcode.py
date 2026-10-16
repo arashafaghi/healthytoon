@@ -15,7 +15,7 @@ from healthytoon.checks.deadcode import DeadCodeCheck
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, FileKind, Severity, Status
+from healthytoon.core.types import Category, FileKind, Finding, Severity, Status
 
 _RULE = "maintainability.dead_code"
 
@@ -75,6 +75,20 @@ def test_dead_code_declares_cross_file_python_metadata() -> None:
     assert check.file_kinds == frozenset({FileKind.PYTHON})
 
 
+def _assert_first_sample_finding(finding: Finding) -> None:
+    assert finding.location is not None
+    assert finding.location.file == "sample.py"
+    assert finding.location.line == 1
+    assert finding.properties["confidence"] == 60
+    assert finding.message == "unused function 'unused'"
+
+
+def _assert_remaining_sample_findings(second: Finding, third: Finding) -> None:
+    assert second.properties["confidence"] == 90
+    assert third.properties["confidence"] == 100
+    assert third.message == "unreachable code after 'return'"
+
+
 def test_dead_code_parses_vulture_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(tmp_path, "sample.py", "value = 1\n")
     captured = _patch_vulture(monkeypatch, stdout=_SAMPLE_OUTPUT)
@@ -84,14 +98,8 @@ def test_dead_code_parses_vulture_output(tmp_path: Path, monkeypatch: pytest.Mon
     assert result.status is Status.WARN
     assert [finding.symbol for finding in result.findings] == ["unused", "os", None]
     first, second, third = result.findings
-    assert first.location is not None
-    assert first.location.file == "sample.py"
-    assert first.location.line == 1
-    assert first.properties["confidence"] == 60
-    assert first.message == "unused function 'unused'"
-    assert second.properties["confidence"] == 90
-    assert third.properties["confidence"] == 100
-    assert third.message == "unreachable code after 'return'"
+    _assert_first_sample_finding(first)
+    _assert_remaining_sample_findings(second, third)
     # The confidence threshold is passed through to the real tool.
     assert captured["args"][:3] == ["/usr/bin/vulture", "--min-confidence", "60"]
 

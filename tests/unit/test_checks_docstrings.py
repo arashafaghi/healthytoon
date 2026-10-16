@@ -10,7 +10,7 @@ from healthytoon.checks.docstrings import DocstringCoverageCheck
 from healthytoon.config.defaults import default_config
 from healthytoon.config.models import Config, RuleConfig
 from healthytoon.core.context import CheckContext
-from healthytoon.core.types import Category, Severity, Status
+from healthytoon.core.types import Category, Finding, Severity, Status
 
 _RULE = "documentation.docstring_coverage"
 
@@ -50,6 +50,17 @@ def _context(tmp_path: Path, rules: Mapping[str, RuleConfig] | None = None) -> C
     return CheckContext.from_config(tmp_path, config)
 
 
+def _assert_docstring_finding(finding: Finding) -> None:
+    assert finding.rule_id == "HT-DOC-001"
+    assert finding.check == _RULE
+    assert finding.category is Category.DOCUMENTATION
+    assert finding.severity is Severity.LOW
+    assert finding.symbol == "<module>"
+    assert finding.location is not None
+    assert finding.location.file == "docs.py"
+    assert finding.location.line == 1
+
+
 def test_docstring_coverage_violation_emits_expected_finding(tmp_path: Path) -> None:
     source = '''"""Module docstring."""
 
@@ -77,14 +88,7 @@ class Undocumented:
     assert result.status is Status.WARN
     assert len(result.findings) == 1
     finding = result.findings[0]
-    assert finding.rule_id == "HT-DOC-001"
-    assert finding.check == _RULE
-    assert finding.category is Category.DOCUMENTATION
-    assert finding.severity is Severity.LOW
-    assert finding.symbol == "<module>"
-    assert finding.location is not None
-    assert finding.location.file == "docs.py"
-    assert finding.location.line == 1
+    _assert_docstring_finding(finding)
     assert dict(finding.properties) == {"documented": 3, "total": 5, "min_ratio": 0.8}
     assert finding.message == "only 3/5 items have docstrings (min 80%)"
 

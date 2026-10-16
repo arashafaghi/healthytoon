@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-from collections.abc import Mapping
 from typing import Any, cast
 
 from healthytoon.core.protocols import Check
@@ -93,47 +92,12 @@ def get_check(check_id: str, *, with_plugins: bool = True) -> Check | None:
 def _entry_points_for(group: str) -> tuple[Any, ...]:
     """Return the entry points registered under ``group``.
 
-    Uses the modern ``entry_points(group=...)`` API and, defensively, falls
-    back to older no-argument forms exposing ``.get(group=...)``.
+    Uses the ``entry_points(group=...)`` API available on Python 3.12+; the
+    caller guards against broken metadata so a bad distribution cannot crash
+    discovery.
     """
 
-    selected: Any
-    try:
-        selected = importlib.metadata.entry_points(group=group)
-    except TypeError:
-        # Older importlib.metadata versions accept no keyword arguments.
-        selected = importlib.metadata.entry_points()
-    return _grouped(selected, group)
-
-
-def _grouped(selected: Any, group: str) -> tuple[Any, ...]:
-    """Extract ``group``'s entry points from whichever collection shape we got."""
-
-    if callable(getattr(selected, "load", None)):
-        return (selected,)
-    if isinstance(selected, Mapping):
-        return tuple(selected.get(group, ()))
-    getter = getattr(selected, "get", None)
-    if callable(getter):
-        try:
-            return tuple(getter(group=group))
-        except TypeError:
-            pass
-        try:
-            return tuple(getter(group, ()))
-        except TypeError:
-            pass
-    select = getattr(selected, "select", None)
-    if callable(select):
-        try:
-            return tuple(select(group=group))
-        except TypeError:
-            pass
-    try:
-        items = tuple(selected)
-    except TypeError:
-        return ()
-    return tuple(entry for entry in items if getattr(entry, "group", group) == group)
+    return tuple(importlib.metadata.entry_points(group=group))
 
 
 def _load_check(entry_point: Any) -> Check | None:

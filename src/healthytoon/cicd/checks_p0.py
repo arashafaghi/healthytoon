@@ -340,66 +340,114 @@ def _action_refs(pipeline: PipelineFile) -> list[tuple[ActionRef, str]]:
     return refs
 
 
+def _action_finding(
+    check: ActionsPinnedCheck,
+    ref: ActionRef,
+    file: str,
+    pointer: str,
+    *,
+    severity: Severity,
+    title: str,
+    message: str,
+    include_ref: bool = False,
+) -> Finding:
+    """Build an action finding with redacted text and a unique ``symbol``.
+
+    ``pointer`` doubles as the finding's ``symbol`` so several references in one
+    file do not collapse to a single fingerprint in the runner.
+    """
+
+    raw = redact(ref.raw)
+    extra: dict[str, object] = {"raw": raw}
+    if include_ref:
+        extra["ref"] = None if ref.ref is None else redact(ref.ref)
+    return _finding(
+        check,
+        severity=severity,
+        title=title,
+        message=message,
+        file=file,
+        pointer=pointer,
+        symbol=pointer,
+        extra=extra,
+    )
+
+
 def _evaluate_action(
     check: ActionsPinnedCheck, ref: ActionRef, file: str, pointer: str
 ) -> Finding | None:
     """Classify one action reference; ``None`` means it is acceptable.
 
-    ``pointer`` doubles as the finding's ``symbol`` so several references in one
-    file do not collapse to a single fingerprint in the runner. ``ref.raw`` (and
-    ``ref.ref``) are redacted before they reach any text field.
+    ``ref.raw`` (and ``ref.ref``) are redacted before they reach any text field.
     """
 
     if ref.is_local:
         return None
-    raw = redact(ref.raw)
-    ref_value = None if ref.ref is None else redact(ref.ref)
     if ref.is_expression:
-        return _finding(
-            check,
-            severity=Severity.INFO,
-            title="Action reference cannot be verified statically",
-            message=f"Action reference '{raw}' is a workflow expression and cannot be pinned.",
-            file=file,
-            pointer=pointer,
-            symbol=pointer,
-            extra={"raw": raw},
-        )
+        return _expression_finding(check, ref, file, pointer)
     if ref.is_docker:
-        if "@sha256:" in raw:
-            return None
-        return _finding(
-            check,
-            severity=Severity.HIGH,
-            title="Docker action is not pinned by digest",
-            message=f"Docker action '{raw}' is not pinned with '@sha256:'.",
-            file=file,
-            pointer=pointer,
-            symbol=pointer,
-            extra={"raw": raw},
-        )
+        return _docker_finding(check, ref, file, pointer)
     if ref.pinned_to_sha:
         return None
+    return _unpinned_finding(check, ref, file, pointer)
+
+
+def _expression_finding(
+    check: ActionsPinnedCheck, ref: ActionRef, file: str, pointer: str
+) -> Finding:
+    raw = redact(ref.raw)
+    return _action_finding(
+        check,
+        ref,
+        file,
+        pointer,
+        severity=Severity.INFO,
+        title="Action reference cannot be verified statically",
+        message=f"Action reference '{raw}' is a workflow expression and cannot be pinned.",
+    )
+
+
+def _docker_finding(
+    check: ActionsPinnedCheck, ref: ActionRef, file: str, pointer: str
+) -> Finding | None:
+    raw = redact(ref.raw)
+    if "@sha256:" in raw:
+        return None
+    return _action_finding(
+        check,
+        ref,
+        file,
+        pointer,
+        severity=Severity.HIGH,
+        title="Docker action is not pinned by digest",
+        message=f"Docker action '{raw}' is not pinned with '@sha256:'.",
+    )
+
+
+def _unpinned_finding(
+    check: ActionsPinnedCheck, ref: ActionRef, file: str, pointer: str
+) -> Finding:
+    raw = redact(ref.raw)
     if ref.ref in _BRANCH_REFS:
-        return _finding(
+        return _action_finding(
             check,
+            ref,
+            file,
+            pointer,
             severity=Severity.CRITICAL,
             title="Action is pinned to a mutable branch",
             message=f"Action '{raw}' tracks the mutable branch '{ref.ref}'.",
-            file=file,
-            pointer=pointer,
-            symbol=pointer,
-            extra={"raw": raw, "ref": ref_value},
+            include_ref=True,
         )
-    return _finding(
+    return _action_finding(
         check,
+        ref,
+        file,
+        pointer,
         severity=Severity.HIGH,
         title="Action is not pinned to a commit SHA",
         message=f"Action '{raw}' is not pinned to a full commit SHA.",
-        file=file,
-        pointer=pointer,
-        symbol=pointer,
-        extra={"raw": raw, "ref": ref_value},
+        include_ref=True,
     )
 
 
