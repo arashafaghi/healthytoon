@@ -331,3 +331,13 @@ def test_build_context_is_memoized_and_clearable(tmp_path: Path) -> None:
     third = build_context(tmp_path, Config())
     assert third is not first
     clear_cache()
+
+
+def test_github_specific_checks_do_not_fire_on_gitlab(tmp_path: Path) -> None:
+    _write(tmp_path, ".gitlab-ci.yml", "test:\n  script:\n    - python -m pytest\n")
+
+    context = _ci(tmp_path)
+
+    assert [job for pipeline in context.artifacts.pipelines for job in pipeline.jobs]
+    assert PermissionsExplicitCheck().analyze(context) == []
+    assert ActionsPinnedCheck().analyze(context) == []

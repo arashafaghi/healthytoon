@@ -248,12 +248,18 @@ class ActionsPinnedCheck(BaseCICheck):
 
     def analyze(self, ci: CIContext) -> list[Finding]:
         findings: list[Finding] = []
-        for pipeline in ci.artifacts.pipelines:
+        for pipeline in _github_pipelines(ci):
             for ref, pointer in _action_refs(pipeline):
                 finding = _evaluate_action(self, ref, pipeline.path, pointer)
                 if finding is not None:
                     findings.append(finding)
         return findings
+
+
+def _github_pipelines(ci: CIContext) -> list[PipelineFile]:
+    """Return only GitHub Actions pipelines for GitHub-specific checks."""
+
+    return [pipeline for pipeline in ci.artifacts.pipelines if pipeline.platform == "github"]
 
 
 def _action_refs(pipeline: PipelineFile) -> list[tuple[ActionRef, str]]:
@@ -330,7 +336,7 @@ class PermissionsExplicitCheck(BaseCICheck):
 
     def analyze(self, ci: CIContext) -> list[Finding]:
         findings: list[Finding] = []
-        for pipeline in ci.artifacts.pipelines:
+        for pipeline in _github_pipelines(ci):
             findings.extend(self._pipeline_findings(pipeline))
         return findings
 

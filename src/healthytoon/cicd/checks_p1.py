@@ -405,7 +405,11 @@ class TriggersPullRequestCheck(BaseCICheck):
     default_severity: Severity = Severity.MEDIUM
 
     def analyze(self, ci: CIContext) -> list[Finding]:
-        pipelines = ci.artifacts.pipelines
+        pipelines = [
+            pipeline
+            for pipeline in ci.artifacts.pipelines
+            if pipeline.platform in {"github", "gitlab"}
+        ]
         if not pipelines:
             return []
         if any("pull_request" in pipeline.triggers for pipeline in pipelines):

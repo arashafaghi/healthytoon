@@ -134,7 +134,7 @@ Additional confirmed decisions:
 
 **Acceptance criteria:** Realistic fixture projects trigger the expected findings and severities. Tests verify observable CLI results, deterministic output, and relevant failure cases. Each check must have appropriate focused coverage.
 
-### Phase 2b — CI/CD engine (status: in progress)
+### Phase 2b — CI/CD engine (status: complete — T2b.1–T2b.5)
 
 - **T2b.1 — Loader:** Implement `cicd/loader.py` using a tolerant `ruamel` loader, including YAML `on:` handling, `RawTag`, duplicate-key detection, and file-size limits.
 - **T2b.2 — GitHub adapter:** Parse GitHub Actions workflows into a shared intermediate representation (IR).
@@ -154,7 +154,7 @@ Additional confirmed decisions:
 - Review all agent results and run final verification.
 - Do not begin Phase 3 until Phase 2 is accepted.
 
-### Phase 3 — Hardening
+### Phase 3 — Hardening (status: in progress)
 
 - **T3.1 — Baseline and suppression:** Implement finding baselines and suppression using the agreed fingerprint algorithm.
 - **T3.2 — `init` and `explain`:** Add initialization and finding-explanation commands.
