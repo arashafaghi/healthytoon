@@ -4,13 +4,25 @@ Audit Python repositories for maintainability and CI/CD health.
 
 ## Status
 
-Healthytoon is a pre-1.0 foundation (version 0.1.0). Implemented so far:
+Healthytoon is a pre-1.0 tool (version 0.1.0). Phases 0–3 are implemented: the CLI and reporting spine, the maintainability engine, the CI/CD engine, and hardening (baselines, `init`, `explain`, and self-CI). The tool ships **22 built-in checks**.
 
-- **Phase 0 — Foundation:** configuration loading, CLI skeleton (`check`, `list`, `version`), exit-code contract, repository discovery.
-- **Phase 1 — Reporting spine:** check runner and registry, plus terminal, JSON, SARIF 2.1.0, and Markdown reporters.
-- **Phase 2a T2a.1a — AST structural checks:** `maintainability.function_length` (HT-MAINT-001), `maintainability.nesting_depth` (HT-MAINT-002), `maintainability.module_length` (HT-MAINT-003), `typing.annotation_coverage` (HT-TYPE-001), `documentation.docstring_coverage` (HT-DOC-001).
+Code-quality checks (9: 7 maintainability, 1 typing, 1 documentation), grouped by category and default severity:
 
-**Not implemented yet:** the CI/CD engine (Phase 2b), complexity analysis via optional Radon (T2a.2), dead-code detection via Vulture (T2a.3), import-cycle and duplication checks (T2a.1b), baselines and suppression, and the `init` and `explain` commands. `check` runs only the five checks above.
+- maintainability, medium: `maintainability.function_length` (HT-MAINT-001), `maintainability.nesting_depth` (HT-MAINT-002), `maintainability.import_cycles` (HT-MAINT-004), `maintainability.complexity` (HT-MAINT-006)
+- maintainability, low: `maintainability.module_length` (HT-MAINT-003), `maintainability.duplication` (HT-MAINT-005), `maintainability.dead_code` (HT-MAINT-007)
+- typing, low: `typing.annotation_coverage` (HT-TYPE-001)
+- documentation, low: `documentation.docstring_coverage` (HT-DOC-001)
+
+CI/CD checks (13), covering GitHub Actions, GitLab CI, and CircleCI pipelines plus Jenkins presence detection:
+
+- ci_cd, high: `ci.workflow_present` (HT-CI-001), `ci.workflow_parse` (HT-CI-002), `ci.tests_present` (HT-CI-003), `ci.actions_pinned` (HT-CI-004), `ci.python_eol` (HT-CI-006)
+- ci_cd, medium: `ci.permissions_explicit` (HT-CI-005), `ci.python_matrix` (HT-CI-007), `ci.python_consistency` (HT-CI-008), `ci.coverage_gate` (HT-CI-009), `ci.lockfile` (HT-CI-010), `ci.triggers_pull_request` (HT-CI-012)
+- ci_cd, low: `ci.dependency_updates` (HT-CI-011)
+- security, critical: `ci.secrets` (HT-SEC-001)
+
+`maintainability.complexity` (Radon) and `maintainability.dead_code` (Vulture) are **optional** backends. When the backend is unavailable the check is reported as skipped rather than passing silently: complexity analysis is skipped when Radon is not importable, and dead-code analysis is skipped when the `vulture` executable is not on `PATH`. `ci.secrets` scans CI YAML for hardcoded secrets and never reports the matched value.
+
+Deferred for v1: HTML reporting, Docker-specific analysis, online branch-protection checks, Jenkins analysis beyond presence detection, and an internal McCabe fallback when Radon is absent.
 
 ## Install
 
@@ -21,12 +33,16 @@ uv sync
 uv run healthytoon --help
 ```
 
+The optional Radon complexity backend ships in the `analysis` extra: `uv sync --extra analysis`. Vulture is an external executable, not a Python dependency; install it separately to enable `maintainability.dead_code`.
+
 ## Quick start
 
 ```bash
-uv run healthytoon version    # tool + interpreter version
-uv run healthytoon list       # the registered checks
-uv run healthytoon check .    # audit the current directory
+uv run healthytoon version              # tool + interpreter version
+uv run healthytoon list                 # the registered checks
+uv run healthytoon init .               # write a starter healthytoon.toml
+uv run healthytoon explain ci.lockfile  # describe a single check
+uv run healthytoon check .              # audit the current directory
 ```
 
 `list` prints one line per registered check: id, category, default severity (for example `maintainability.function_length  maintainability  medium`).
@@ -56,12 +72,22 @@ Audit a target directory (default: `.`). Exactly one target is accepted; passing
 | `--only PATTERN` | Run only checks whose id matches `PATTERN` (repeatable, glob). |
 | `--skip PATTERN` | Skip checks whose id matches `PATTERN` (repeatable, glob). |
 | `--exclude GLOB` | Exclude a path glob (repeatable; added on top of configured excludes). |
+| `--baseline PATH` | Suppress findings whose fingerprint is recorded in this baseline file. Overrides a configured `baseline`; a missing file is a configuration error. |
+| `--write-baseline PATH` | Write the current findings' fingerprints to `PATH` as a baseline, print a one-line confirmation, and exit 0 instead of rendering a report or evaluating the gate. |
 | `--config PATH` | Load this configuration file instead of discovering one. |
 | `--jobs N` | Maximum parallel workers (overrides configured `jobs`). Checks currently run sequentially; parallelism arrives in a later phase. |
 | `--color {auto,always,never}` | Color output mode (default: `auto`). |
 | `-q, --quiet` | Suppress the human-readable terminal report (other formats still print). |
 | `-v, --verbose` | Increase verbosity; unexpected errors then print a traceback. |
 | `--no-progress` | Accepted, but progress reporting is not implemented yet (no-op). |
+
+### `healthytoon init [PATH] [--force]`
+
+Write a documented starter `healthytoon.toml` inside `PATH` (default: `.`). It refuses to overwrite an existing file unless `--force` is passed. A `PATH` that exists but is not a directory, and an existing config without `--force`, are both usage errors (exit 2).
+
+### `healthytoon explain CHECK_ID`
+
+Print one check's id, category, default severity, and a one-line summary. `CHECK_ID` is the check id shown by `healthytoon list` (for example `ci.lockfile` or `maintainability.function_length`), not the `HT-*` rule id. An unknown id is a usage error (exit 2).
 
 ### `healthytoon list [--category CATEGORY]`
 
@@ -118,17 +144,21 @@ options = { max_length = 50 }
 - `include` — path globs to scan (default: `["**"]`, i.e. the whole repository).
 - `exclude` — path globs to skip. Defaults exclude VCS, virtualenv, build, and cache directories (`.git`, `.hg`, `.svn`, `.venv`, `venv`, `.tox`, `.nox`, `.eggs`, `__pycache__`, `build`, `dist`, `site-packages`, `*.egg-info`, `node_modules`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `htmlcov`). CLI `--exclude` values are added to these.
 - `respect_gitignore` — honor `.gitignore` during discovery (default: `true`).
-- `fail_on` — default gate severity (default: `high`). `baseline` — reserved, accepted and stored but not applied yet.
+- `fail_on` — default gate severity (default: `high`). `baseline` — path to a baseline file; findings whose fingerprint it records are suppressed before the gate is evaluated. A missing configured file is ignored (a missing `--baseline` file is an error).
 - `jobs` — maximum parallel workers; currently accepted but checks run sequentially.
 - `output` — table with `format` (`terminal` | `json` | `sarif` | `markdown`), `color` (`auto` | `always` | `never`), and `output` (`-` or a file path).
 - `rules."<check-id>"` — per-check settings keyed by the **check id** (for example `maintainability.function_length`), **not** by the `HT-*` rule id. An `HT-*` key is accepted but is a silent no-op: it neither selects nor configures a check. Each entry supports `enabled` (bool), `severity` (overrides the check's default severity), and `options` (table).
 
-Per-check `options` (defaults in parentheses): `maintainability.function_length` `max_length` (50); `maintainability.nesting_depth` `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false); `maintainability.module_length` `max_lines` (1000); `typing.annotation_coverage` `min_ratio` (0.8); `documentation.docstring_coverage` `min_ratio` (0.8).
+Per-check `options` (defaults in parentheses): `maintainability.function_length` `max_length` (50); `maintainability.nesting_depth` `max_depth` (5), `count_comprehensions` (false), `count_lambdas` (false); `maintainability.module_length` `max_lines` (1000); `maintainability.duplication` `min_tokens` (50), `min_occurrences` (2); `maintainability.complexity` `max_cyclomatic` (10); `maintainability.dead_code` `min_confidence` (60), `whitelist` (empty); `typing.annotation_coverage` `min_ratio` (0.8); `documentation.docstring_coverage` `min_ratio` (0.8). `maintainability.import_cycles` has no options.
 
 ## Severity and scoring
 
 Five severities, ordered from least to most severe: `info`, `low`, `medium`, `high`, `critical`. A finding fails the gate when its severity is at or above `--fail-on`. Reports also include an overall score (0–100) with a letter grade (A–F), aggregated per category; the score is **informational only** and never fails the command on its own. The exit status depends on findings versus the `--fail-on` gate (plus the internal-error case above).
 
+## Self-CI
+
+Healthytoon dogfoods itself. `.github/workflows/ci.yml` runs on every push to `master`/`main` and every pull request: Ruff lint and `ruff format --check`, strict mypy over `src`, and pytest with `--cov-fail-under=90`. The pytest job runs on Python 3.12 and 3.13; a separate build job builds the wheel and installs it into a clean virtual environment as a smoke test.
+
 ## Documentation
 
-This README documents implemented functionality only. Planned work (the CI/CD engine, Radon complexity analysis, Vulture dead-code detection, import-cycle and duplication checks, baselines and suppression, and `init`/`explain`) is listed in `ROADMAP.md`.
+This README documents implemented functionality only. Deferred work (HTML reporting, Docker-specific analysis, online branch-protection checks, Jenkins analysis beyond presence detection, and an internal McCabe fallback) is listed in `ROADMAP.md`.
