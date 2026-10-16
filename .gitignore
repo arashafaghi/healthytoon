@@ -13,3 +13,6 @@ wheels/
 .coverage
 .coverage.*
 htmlcov/
+
+# Nox environments
+.nox/

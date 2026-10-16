@@ -28,6 +28,7 @@ healthytoon = "healthytoon.cli.app:main"
 dev = [
     "jsonschema>=4.21",
     "mypy>=1.11",
+    "nox>=2024.3.2",
     "pytest>=8.0",
     "pytest-cov>=7.1.0",
     "radon>=6.0.1",
