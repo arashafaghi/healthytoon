@@ -341,3 +341,89 @@ def test_github_specific_checks_do_not_fire_on_gitlab(tmp_path: Path) -> None:
     assert [job for pipeline in context.artifacts.pipelines for job in pipeline.jobs]
     assert PermissionsExplicitCheck().analyze(context) == []
     assert ActionsPinnedCheck().analyze(context) == []
+
+
+# --- B1: secrets must never reach a rendered report --------------------------
+
+
+def test_workflow_parse_duplicate_key_never_leaks_the_value(tmp_path: Path) -> None:
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    password: hunter2secret\n"
+        "    password: hunter2secret\n"
+        "    steps:\n"
+        "      - run: echo hi\n",
+    )
+
+    ctx = CheckContext.from_config(tmp_path, Config())
+    report = run_checks((WorkflowParseCheck(),), ctx, tool=ToolInfo(version="test"))
+    output = JsonReporter().render(report)
+
+    payload = json.loads(output)
+    findings = [f for f in payload["findings"] if f["rule_id"] == "HT-CI-002"]
+    assert len(findings) == 1
+    # The key name and line survive; the duplicated value never does.
+    assert "duplicate key 'password' (line 6)" in findings[0]["message"]
+    assert "hunter2secret" not in output
+
+
+def test_action_token_never_leaks_into_any_finding(tmp_path: Path) -> None:
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        f"      - uses: evil/repo@{_GH_TOKEN}\n",
+    )
+
+    ctx = CheckContext.from_config(tmp_path, Config())
+    report = run_checks((SecretsCheck(), ActionsPinnedCheck()), ctx, tool=ToolInfo(version="test"))
+    output = JsonReporter().render(report)
+
+    payload = json.loads(output)
+    rule_ids = {finding["rule_id"] for finding in payload["findings"]}
+    assert {"HT-SEC-001", "HT-CI-004"} <= rule_ids
+    assert _GH_TOKEN not in output
+
+
+# --- M1: distinct findings must survive runner fingerprint deduplication -----
+
+
+def test_actions_pinned_keeps_each_reference_distinct_in_the_runner(tmp_path: Path) -> None:
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v5\n"
+        "      - uses: actions/setup-python@v5\n"
+        "      - uses: actions/cache@v4\n"
+        "      - uses: actions/upload-artifact@v4\n",
+    )
+
+    ctx = CheckContext.from_config(tmp_path, Config())
+    report = run_checks((ActionsPinnedCheck(),), ctx, tool=ToolInfo(version="test"))
+
+    findings = [finding for finding in report.findings if finding.rule_id == "HT-CI-004"]
+    assert len(findings) == 4
+
+
+# --- M3: presence-only pipelines are not "missing tests" ---------------------
+
+
+def test_tests_present_skips_presence_only_jenkinsfile(tmp_path: Path) -> None:
+    _write(tmp_path, "Jenkinsfile", "node { echo 'hi' }\n")
+
+    context = _ci(tmp_path)
+
+    assert context.artifacts.pipelines
+    assert not [job for pipeline in context.artifacts.pipelines for job in pipeline.jobs]
+    assert TestsPresentCheck().analyze(context) == []

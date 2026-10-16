@@ -99,3 +99,25 @@ def test_duplication_min_tokens_is_configurable(tmp_path: Path) -> None:
         "occurrences": 2,
         "files": ["one.py", "two.py"],
     }
+
+
+def test_duplication_max_findings_is_configurable(tmp_path: Path) -> None:
+    _write(tmp_path, "alpha_one.py", _block(12, prefix="alpha_"))
+    _write(tmp_path, "alpha_two.py", _block(12, prefix="alpha_"))
+    _write(tmp_path, "beta_one.py", _block(12, prefix="beta_"))
+    _write(tmp_path, "beta_two.py", _block(12, prefix="beta_"))
+    rules = {_RULE: RuleConfig(options={"max_findings": 1})}
+
+    result = DuplicationCheck().run(_context(tmp_path, rules))
+
+    assert len(result.findings) == 1
+    assert result.notes == "duplication findings truncated to 1 of 2 groups"
+
+
+def test_duplication_notes_are_absent_when_not_truncated(tmp_path: Path) -> None:
+    _write(tmp_path, "one.py", _block(12))
+    _write(tmp_path, "two.py", _block(12))
+
+    result = DuplicationCheck().run(_context(tmp_path))
+
+    assert result.notes is None

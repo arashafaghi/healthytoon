@@ -14,6 +14,7 @@ line information. Hardcoded-secret findings never contain the matched value.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Mapping
 
@@ -72,6 +73,13 @@ _SPECIFIC_SECRET_TEXT_RE = re.compile(
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
 )
 
+#: Key name in a YAML duplicate-key error. The error text also embeds the value,
+#: so only this capture group may ever be surfaced.
+_DUPLICATE_KEY_RE = re.compile(r'duplicate key\s+"([^"]*)"')
+
+#: The ``(line N)`` suffix the tolerant loader appends to a loader error.
+_LINE_RE = re.compile(r"\(line (\d+)\)")
+
 
 def redact(text: str) -> str:
     """Return ``text`` with anything secret-looking replaced by :data:`_REDACTED`."""
@@ -90,6 +98,40 @@ def _secret_kind(line: str) -> str | None:
     if _GENERIC_SECRET_RE.search(line):
         return "literal-credential"
     return None
+
+
+def _redact_value(value: object) -> object:
+    """Return ``value`` with secret-looking strings replaced, recursively.
+
+    Only strings, mappings, and sequences are traversed; every other value (for
+    example an ``int`` or ``bool``) is returned unchanged.
+    """
+
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, Mapping):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return value
+
+
+def _sanitize_finding(finding: Finding) -> Finding:
+    """Return ``finding`` with every free-text field passed through :func:`redact`.
+
+    This is the single choke point that structurally guarantees no CI/CD check
+    can leak a secret through ``title``, ``message``, ``symbol``, ``evidence``,
+    or any string value reachable from ``properties``.
+    """
+
+    return dataclasses.replace(
+        finding,
+        title=redact(finding.title),
+        message=redact(finding.message),
+        symbol=None if finding.symbol is None else redact(finding.symbol),
+        evidence=None if finding.evidence is None else redact(finding.evidence),
+        properties={key: _redact_value(value) for key, value in finding.properties.items()},
+    )
 
 
 def _finding(
@@ -152,9 +194,10 @@ class BaseCICheck:
         raise NotImplementedError
 
     def run(self, ctx: CheckContext) -> CheckResult:
-        """Build the shared context, analyze it, and sort the findings."""
+        """Build the shared context, analyze it, sanitize, and sort the findings."""
 
-        findings = sorted(self.analyze(build_context(ctx.root, ctx.config)), key=_sort_key)
+        raw = self.analyze(build_context(ctx.root, ctx.config))
+        findings = sorted((_sanitize_finding(finding) for finding in raw), key=_sort_key)
         status = Status.WARN if findings else Status.PASS
         return CheckResult(check=self.id, findings=tuple(findings), status=status)
 
@@ -194,18 +237,35 @@ class WorkflowParseCheck(BaseCICheck):
         for pipeline in ci.artifacts.pipelines:
             if pipeline.parse_error is None:
                 continue
-            error = redact(pipeline.parse_error)
+            summary = _parse_error_summary(pipeline.parse_error)
             findings.append(
                 _finding(
                     self,
                     severity=Severity.HIGH,
                     title="Pipeline configuration failed to parse",
-                    message=f"{pipeline.path} could not be parsed: {error}",
+                    message=f"{pipeline.path}: {summary}",
                     file=pipeline.path,
                     pointer="/",
                 )
             )
         return findings
+
+
+def _parse_error_summary(error: str) -> str:
+    """Return a safe, value-free summary of a tolerant-loader error.
+
+    Duplicate-key errors embed both the key and its value in the raw text (for
+    example ``found duplicate key "password" with value "hunter2secret"``), so
+    only the key name and line number may ever be surfaced. Any other error is
+    reduced to a generic message plus its line, if known.
+    """
+
+    line_match = _LINE_RE.search(error)
+    suffix = f" (line {line_match.group(1)})" if line_match is not None else ""
+    duplicate = _DUPLICATE_KEY_RE.search(error)
+    if duplicate is not None:
+        return f"duplicate key '{duplicate.group(1)}'{suffix}"
+    return f"pipeline configuration could not be parsed{suffix}"
 
 
 class TestsPresentCheck(BaseCICheck):
@@ -219,7 +279,12 @@ class TestsPresentCheck(BaseCICheck):
         pipelines = ci.artifacts.pipelines
         if not pipelines:
             return []
-        if any(_runs_tests(job) for pipeline in pipelines for job in pipeline.jobs):
+        jobs = [job for pipeline in pipelines for job in pipeline.jobs]
+        if not jobs:
+            # A pipeline exists but exposes no jobs (for example a presence-only
+            # Jenkinsfile), so there is nothing to inspect and no finding.
+            return []
+        if any(_runs_tests(job) for job in jobs):
             return []
         return [
             _finding(
@@ -278,31 +343,40 @@ def _action_refs(pipeline: PipelineFile) -> list[tuple[ActionRef, str]]:
 def _evaluate_action(
     check: ActionsPinnedCheck, ref: ActionRef, file: str, pointer: str
 ) -> Finding | None:
-    """Classify one action reference; ``None`` means it is acceptable."""
+    """Classify one action reference; ``None`` means it is acceptable.
+
+    ``pointer`` doubles as the finding's ``symbol`` so several references in one
+    file do not collapse to a single fingerprint in the runner. ``ref.raw`` (and
+    ``ref.ref``) are redacted before they reach any text field.
+    """
 
     if ref.is_local:
         return None
+    raw = redact(ref.raw)
+    ref_value = None if ref.ref is None else redact(ref.ref)
     if ref.is_expression:
         return _finding(
             check,
             severity=Severity.INFO,
             title="Action reference cannot be verified statically",
-            message=f"Action reference '{ref.raw}' is a workflow expression and cannot be pinned.",
+            message=f"Action reference '{raw}' is a workflow expression and cannot be pinned.",
             file=file,
             pointer=pointer,
-            extra={"raw": ref.raw},
+            symbol=pointer,
+            extra={"raw": raw},
         )
     if ref.is_docker:
-        if "@sha256:" in ref.raw:
+        if "@sha256:" in raw:
             return None
         return _finding(
             check,
             severity=Severity.HIGH,
             title="Docker action is not pinned by digest",
-            message=f"Docker action '{ref.raw}' is not pinned with '@sha256:'.",
+            message=f"Docker action '{raw}' is not pinned with '@sha256:'.",
             file=file,
             pointer=pointer,
-            extra={"raw": ref.raw},
+            symbol=pointer,
+            extra={"raw": raw},
         )
     if ref.pinned_to_sha:
         return None
@@ -311,19 +385,21 @@ def _evaluate_action(
             check,
             severity=Severity.CRITICAL,
             title="Action is pinned to a mutable branch",
-            message=f"Action '{ref.raw}' tracks the mutable branch '{ref.ref}'.",
+            message=f"Action '{raw}' tracks the mutable branch '{ref.ref}'.",
             file=file,
             pointer=pointer,
-            extra={"raw": ref.raw, "ref": ref.ref},
+            symbol=pointer,
+            extra={"raw": raw, "ref": ref_value},
         )
     return _finding(
         check,
         severity=Severity.HIGH,
         title="Action is not pinned to a commit SHA",
-        message=f"Action '{ref.raw}' is not pinned to a full commit SHA.",
+        message=f"Action '{raw}' is not pinned to a full commit SHA.",
         file=file,
         pointer=pointer,
-        extra={"raw": ref.raw, "ref": ref.ref},
+        symbol=pointer,
+        extra={"raw": raw, "ref": ref_value},
     )
 
 

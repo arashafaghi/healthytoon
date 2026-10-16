@@ -34,7 +34,7 @@ __all__ = ["DuplicationCheck"]
 _DEFAULT_MIN_TOKENS = 50
 #: Occurrences of an identical window before it counts as duplicated.
 _DEFAULT_MIN_OCCURRENCES = 2
-#: Upper bound on emitted duplication findings per run.
+#: Default upper bound on emitted duplication findings per run.
 _MAX_FINDINGS = 50
 
 #: Token types that carry no comparable source content.
@@ -80,11 +80,11 @@ def _int_option(options: Mapping[str, object], key: str, default: int) -> int:
     return default
 
 
-def _result(check_id: str, findings: list[Finding]) -> CheckResult:
+def _result(check_id: str, findings: list[Finding], *, notes: str | None = None) -> CheckResult:
     """Wrap ``findings`` in a :class:`CheckResult` (WARN when anything fired)."""
 
     status = Status.WARN if findings else Status.PASS
-    return CheckResult(check=check_id, findings=tuple(findings), status=status)
+    return CheckResult(check=check_id, findings=tuple(findings), status=status, notes=notes)
 
 
 #: A normalized token paired with its starting source line.
@@ -191,10 +191,12 @@ class DuplicationCheck:
             {
                 "min_tokens": _DEFAULT_MIN_TOKENS,
                 "min_occurrences": _DEFAULT_MIN_OCCURRENCES,
+                "max_findings": _MAX_FINDINGS,
             },
         )
         min_tokens = max(1, _int_option(options, "min_tokens", _DEFAULT_MIN_TOKENS))
         min_occurrences = max(2, _int_option(options, "min_occurrences", _DEFAULT_MIN_OCCURRENCES))
+        max_findings = max(1, _int_option(options, "max_findings", _MAX_FINDINGS))
 
         files: dict[str, list[_Token]] = {}
         for path in sorted(ctx.files_for(self.file_kinds)):
@@ -233,17 +235,22 @@ class DuplicationCheck:
             )
         )
 
-        accepted: list[tuple[int, list[_Occurrence], list[tuple[str, int, int]]]] = []
+        eligible: list[tuple[int, list[_Occurrence], list[tuple[str, int, int]]]] = []
         coverage: dict[str, list[tuple[int, int]]] = {}
         for candidate in candidates:
-            if len(accepted) >= _MAX_FINDINGS:
-                break
             _, occurrences, merged = candidate
             if all(_covered(coverage.get(file, ()), begin, end) for file, begin, end in merged):
                 continue
-            accepted.append(candidate)
+            eligible.append(candidate)
             for file, begin, end in merged:
                 coverage.setdefault(file, []).append((begin, end))
+
+        accepted = eligible[:max_findings]
+        notes = (
+            f"duplication findings truncated to {max_findings} of {len(eligible)} groups"
+            if len(eligible) > max_findings
+            else None
+        )
 
         findings: list[Finding] = []
         for length, occurrences, merged in accepted:
@@ -282,4 +289,4 @@ class DuplicationCheck:
             )
 
         findings.sort(key=lambda finding: finding.location.file if finding.location else "")
-        return _result(self.id, findings)
+        return _result(self.id, findings, notes=notes)

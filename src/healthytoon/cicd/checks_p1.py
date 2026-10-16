@@ -35,6 +35,33 @@ _INSTALL_RE = re.compile(
     r"\b(?:uv\s+(?:sync|pip\s+install)|pip\s+install|poetry\s+install|pipenv\s+install)\b"
 )
 
+#: A ``pip install`` invocation, which may target a local artifact instead of a
+#: package index.
+_PIP_INSTALL_RE = re.compile(r"\b(?:uv\s+pip\s+install|pip\s+install)\b")
+
+#: An editable install (``-e``/``--editable``) always points at a local tree.
+_EDITABLE_RE = re.compile(r"(?:^|\s)(?:-e|--editable)(?:\s|=|$)")
+
+#: ``pip`` flags that consume the next token as a value, so a path passed to one
+#: of them (for example ``-r ./requirements.txt``) is not an install target.
+_PIP_VALUE_FLAGS = frozenset(
+    {
+        "-r",
+        "--requirement",
+        "-c",
+        "--constraint",
+        "-i",
+        "--index-url",
+        "--extra-index-url",
+        "-f",
+        "--find-links",
+        "--no-binary",
+        "--only-binary",
+        "--target",
+        "-t",
+    }
+)
+
 #: Flags that force a reproducible, lockfile-backed install.
 _FROZEN_RE = re.compile(r"--(?:frozen|locked|require-hashes)\b|--no-update\b")
 
@@ -92,7 +119,10 @@ class PythonEolCheck(BaseCICheck):
     def analyze(self, ci: CIContext) -> list[Finding]:
         findings: list[Finding] = []
         seen: set[tuple[str, str, str]] = set()
-        for pipeline, pointer, cycle in _ci_versions(ci):
+        versions = _ci_versions(ci)
+        if not versions:
+            return []
+        for pipeline, pointer, cycle in versions:
             eol = _eol_date(cycle, ci)
             if eol is None or eol >= ci.today:
                 continue
@@ -131,7 +161,10 @@ class PythonMatrixCheck(BaseCICheck):
         cycles = {
             cycle for _pipeline, _pointer, cycle in _ci_versions(ci) if _is_supported(cycle, ci)
         }
-        if len(cycles) >= 2:
+        if len(cycles) != 1:
+            # Zero detectable versions (for example a GitLab/CircleCI/Jenkins
+            # pipeline whose adapter exposes none) is not evidence of too few;
+            # only exactly one supported minor is a reportable gap.
             return []
         return [
             _finding(
@@ -278,7 +311,25 @@ def _measures_coverage(pipeline: PipelineFile) -> bool:
 
 
 def _enforces_coverage(pipeline: PipelineFile) -> bool:
-    return any(_COVERAGE_ENFORCE_RE.search(command) for command in _run_commands(pipeline))
+    for job in pipeline.jobs:
+        for step in job.steps:
+            if step.run is not None and _COVERAGE_ENFORCE_RE.search(step.run):
+                return True
+            if _truthy(step.with_.get("fail_ci_if_error")):
+                return True
+    return False
+
+
+def _truthy(value: object) -> bool:
+    """Interpret a YAML/action-input scalar as a boolean."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return False
 
 
 class LockfileCheck(BaseCICheck):
@@ -307,7 +358,7 @@ class LockfileCheck(BaseCICheck):
                     command = step.run
                     if command is None or not _INSTALL_RE.search(command):
                         continue
-                    if _FROZEN_RE.search(command):
+                    if _FROZEN_RE.search(command) or _is_local_install(command):
                         continue
                     findings.append(
                         _finding(
@@ -320,9 +371,45 @@ class LockfileCheck(BaseCICheck):
                             ),
                             file=pipeline.path,
                             pointer=step.pointer,
+                            symbol=step.pointer,
                         )
                     )
         return findings
+
+
+def _is_local_install(command: str) -> bool:
+    """True when a ``pip install`` targets a local artifact, not a registry.
+
+    Installs of a built wheel (``dist/*.whl``), a local path (``.``, ``./...``,
+    or an absolute path), and editable installs (``-e``/``--editable``) are
+    reproducible by construction and must not be flagged as unfrozen.
+    """
+
+    if _PIP_INSTALL_RE.search(command) is None:
+        return False
+    if _EDITABLE_RE.search(command) is not None:
+        return True
+    tokens = command.split()
+    for index, token in enumerate(tokens):
+        if token != "install":
+            continue
+        skip_next = False
+        for argument in tokens[index + 1 :]:
+            if skip_next:
+                skip_next = False
+                continue
+            if argument in _PIP_VALUE_FLAGS:
+                skip_next = True
+                continue
+            if argument.startswith("-"):
+                continue
+            if (
+                argument.endswith(".whl")
+                or argument == "."
+                or argument.startswith(("./", "../", "/"))
+            ):
+                return True
+    return False
 
 
 class DependencyUpdatesCheck(BaseCICheck):

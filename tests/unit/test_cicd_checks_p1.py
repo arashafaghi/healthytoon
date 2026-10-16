@@ -15,7 +15,10 @@ from healthytoon.cicd.checks_p1 import (
 )
 from healthytoon.cicd.github import collect_artifacts
 from healthytoon.cicd.ir import CIContext
-from healthytoon.core.types import Severity
+from healthytoon.config.models import Config
+from healthytoon.core.context import CheckContext
+from healthytoon.core.runner import run_checks
+from healthytoon.core.types import Severity, ToolInfo
 
 _EOL = {
     "3.8": {"release": "2019-10-14", "eol": "2024-10-07"},
@@ -287,3 +290,98 @@ def test_triggers_pull_request_passes_when_present(tmp_path: Path) -> None:
 
 def test_triggers_pull_request_skips_without_pipelines(tmp_path: Path) -> None:
     assert TriggersPullRequestCheck().analyze(_ci(tmp_path)) == []
+
+
+# --- M2: no detectable Python versions is not a finding ----------------------
+
+
+def test_python_checks_skip_gitlab_only_repo(tmp_path: Path) -> None:
+    _write(tmp_path, ".gitlab-ci.yml", "test:\n  script:\n    - python -m pytest -q\n")
+
+    context = _ci(tmp_path)
+
+    assert PythonMatrixCheck().analyze(context) == []
+    assert PythonEolCheck().analyze(context) == []
+
+
+# --- M1: distinct installs survive runner fingerprint deduplication ----------
+
+
+def test_lockfile_keeps_each_install_distinct_in_the_runner(tmp_path: Path) -> None:
+    _write(tmp_path, "uv.lock", "")
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: pip install -r requirements.txt\n"
+        "      - run: pip install -r requirements-dev.txt\n"
+        "      - run: pip install requests\n",
+    )
+
+    ctx = CheckContext.from_config(tmp_path, Config())
+    report = run_checks((LockfileCheck(),), ctx, tool=ToolInfo(version="test"))
+
+    findings = [finding for finding in report.findings if finding.rule_id == "HT-CI-010"]
+    assert len(findings) == 3
+
+
+# --- m2: local artifact installs are not unfrozen installs -------------------
+
+
+def test_lockfile_ignores_local_artifact_installs(tmp_path: Path) -> None:
+    _write(tmp_path, "uv.lock", "")
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: uv pip install dist/*.whl\n"
+        "      - run: pip install -r requirements.txt\n",
+    )
+
+    findings = LockfileCheck().analyze(_ci(tmp_path))
+
+    assert len(findings) == 1
+    assert findings[0].properties["pointer"] == "/jobs/test/steps/1"
+
+
+def test_lockfile_ignores_editable_and_local_path_installs(tmp_path: Path) -> None:
+    _write(tmp_path, "uv.lock", "")
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: pip install -e .\n"
+        "      - run: pip install ./packages/core\n"
+        "      - run: pip install /opt/pkg\n",
+    )
+
+    assert LockfileCheck().analyze(_ci(tmp_path)) == []
+
+
+# --- m3: coverage enforcement can live in action inputs ----------------------
+
+
+def test_coverage_gate_enforced_by_action_input(tmp_path: Path) -> None:
+    _workflow(
+        tmp_path,
+        "on: push\n"
+        "jobs:\n"
+        "  test:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: pytest --cov=src\n"
+        "      - uses: codecov/codecov-action@v5\n"
+        "        with:\n"
+        "          fail_ci_if_error: true\n",
+    )
+
+    assert CoverageGateCheck().analyze(_ci(tmp_path)) == []
